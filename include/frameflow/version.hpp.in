@@ -1,0 +1,13 @@
+// version.hpp (generated from version.hpp.in by CMake; do not edit the generated copy)
+// Responsibility: expose the FrameFlow version string.
+// Thread-safety: constants and a pure function; safe to call from any thread.
+#pragma once
+
+namespace frameflow {
+
+inline constexpr const char* kVersionString = "@PROJECT_VERSION@";
+
+// Returns the version compiled into frameflow_core, e.g. "0.1.0".
+const char* version();
+
+}  // namespace frameflow
