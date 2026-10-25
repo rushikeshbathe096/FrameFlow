@@ -262,3 +262,18 @@ single-threaded OpenCV and FFmpeg only (D50); preview is a run-only option (D51)
 bursty half of "repeat E2 and E3" (D53); one clang-tidy check disabled (D54); gcov instead of
 lcov (D55); PR-04 judged by micro-benchmark analysis (D56).
 
+## After Phase 5: preview threading fix
+
+- D57 preview on the main thread (user's manual run: Qt thread warnings, 18.5 instead of 20.0 fps
+  with `--preview`): `PreviewMailbox` (one slot, newest only, post never waits), `PreviewSink`
+  posts a shallow image + overlay data and calls no HighGUI, `PreviewDisplay::pump()` on the main
+  thread every 15 ms via `Pipeline::set_tick(tick, interval)`; window created/destroyed on the
+  main thread; close button stops the run: `sink/preview_sink.*`, `pipeline.*`, `run_command.cpp`,
+  `preview_sink_test.cpp` (mailbox newest-only, post never waits, concurrent post/take; sink
+  posts every frame without copying pixels; display: newest only, q/Esc/close stop once, Space,
+  o, grey frames) | debug 452/452, tsan 452/452, asan 452/452, clang-tidy clean. Reproduced
+  before the fix (release, 10 s, 1.5x): 20.0 fps without / 18.5 with preview + 3 Qt warnings.
+  After, 2 runs each: 20.0 / 20.0 fps; the Timers warnings are gone; one QSocketNotifier line
+  remains, which a minimal single-threaded OpenCV program also prints on this Wayland session
+  (silent with QT_QPA_PLATFORM=xcb, where a FrameFlow preview run printed nothing at 20.0 fps)
+

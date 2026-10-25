@@ -75,9 +75,12 @@ class Pipeline {
   void request_stop();
   bool shedding() const { return policy_->shedding(); }  // any thread (preview border)
 
-  // `--progress` (D52): set before run(); run() calls it on its own thread about once per
-  // second while waiting for the end, so the callback may do I/O. Keep it short.
-  void set_tick(std::function<void()> tick) { tick_ = std::move(tick); }
+  // D52, D57: set before run(); run() calls it on its own thread (main) about every `interval`
+  // while waiting for the end, so the callback may do I/O or GUI work. Keep it short.
+  void set_tick(std::function<void()> tick, Clock::duration interval = kTickInterval) {
+    tick_ = std::move(tick);
+    tick_interval_ = interval;
+  }
   static constexpr std::chrono::seconds kTickInterval{1};
 
   struct LiveStatus {
@@ -119,6 +122,7 @@ class Pipeline {
   std::string error_;
 
   std::function<void()> tick_;
+  Clock::duration tick_interval_{kTickInterval};
   bool started_ = false;
   std::thread source_thread_;
   std::thread worker_thread_;

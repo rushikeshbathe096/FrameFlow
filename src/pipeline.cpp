@@ -124,7 +124,7 @@ bool Pipeline::wait_for_end(bool& duration_reached) {
   while (true) {
     std::optional<Clock::duration> step;
     if (config_.duration) step = *config_.duration - (clock_.now() - t0_);
-    if (tick_) step = step ? std::min<Clock::duration>(*step, kTickInterval) : kTickInterval;
+    if (tick_) step = step ? std::min(*step, tick_interval_) : tick_interval_;
     if (!step) {
       state_changed_.wait(lock, ended);
       break;

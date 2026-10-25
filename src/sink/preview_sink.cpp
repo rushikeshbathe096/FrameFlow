@@ -12,9 +12,6 @@ namespace frameflow {
 
 namespace {
 
-using std::chrono::milliseconds;
-
-constexpr milliseconds kMinShowInterval{33};  // at most ~30 shown frames per second
 cv::Scalar amber() { return {0, 159, 230}; }  // BGR of #E69F00 (UIUX 12.2)
 cv::Scalar white() { return {255, 255, 255}; }
 constexpr int kPadding = 12;
@@ -83,7 +80,16 @@ void HighGuiWindow::show(const cv::Mat& image) {
   cv::imshow(title_, image);
 }
 
-int HighGuiWindow::poll_key() { return cv::waitKey(1); }  // UIUX 7.2: 1 ms on the sink side
+int HighGuiWindow::poll_key() { return cv::waitKey(1); }  // pumps the GUI events too
+
+bool HighGuiWindow::closed() const {
+  if (!created_) return false;
+  try {
+    return cv::getWindowProperty(title_, cv::WND_PROP_VISIBLE) < 1.0;
+  } catch (const cv::Exception&) {
+    return true;  // the window no longer exists
+  }
+}
 
 void draw_overlay(cv::Mat& canvas, const OverlayInfo& info) {
   if (info.panel) draw_panel(canvas, info);
@@ -99,35 +105,31 @@ void draw_overlay(cv::Mat& canvas, const OverlayInfo& info) {
   }
 }
 
-PreviewSink::PreviewSink(Clock& clock, std::unique_ptr<IPreviewWindow> window, std::string policy,
-                         std::function<bool()> shedding, std::function<void()> request_stop)
+void PreviewMailbox::post(PreviewItem item) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  slot_ = std::move(item);  // the older item, if any, is released here
+}
+
+std::optional<PreviewItem> PreviewMailbox::take() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::optional<PreviewItem> item = std::move(slot_);
+  slot_.reset();
+  return item;
+}
+
+PreviewSink::PreviewSink(Clock& clock, PreviewMailbox& mailbox, std::string policy,
+                         std::function<bool()> shedding)
     : clock_(clock),
-      window_(std::move(window)),
+      mailbox_(mailbox),
       policy_(std::move(policy)),
-      shedding_(std::move(shedding)),
-      request_stop_(std::move(request_stop)) {}
+      shedding_(std::move(shedding)) {}
 
 void PreviewSink::consume(Frame& frame) {
   const Clock::time_point now = clock_.now();
-  frame.meta.t_out = now;  // first: drawing is not latency
+  frame.meta.t_out = now;  // first: showing is not latency
   update_counters(frame, now);
-  if (!paused_ && (!last_shown_ || now - *last_shown_ >= kMinShowInterval)) {
-    last_image_ = to_bgr(frame.image);  // a copy: the frame is freed after the sink
-    last_info_ = overlay_for(frame, now);
-    show_last();
-    last_shown_ = now;
-  }
-  handle_key(window_->poll_key());
-}
-
-void PreviewSink::show_last() {
-  if (last_image_.empty()) return;
-  cv::Mat canvas = last_image_.clone();
-  OverlayInfo info = last_info_;
-  info.paused = paused_;
-  info.panel = panel_;
-  draw_overlay(canvas, info);
-  window_->show(canvas);
+  last_info_ = overlay_for(frame, now);
+  mailbox_.post(PreviewItem{frame.image, last_info_});  // shares the pixels: no copy, no drawing
 }
 
 void PreviewSink::update_counters(const Frame& frame, Clock::time_point now) {
@@ -157,7 +159,34 @@ OverlayInfo PreviewSink::overlay_for(const Frame& frame, Clock::time_point t_out
   return info;
 }
 
-void PreviewSink::handle_key(int key) {
+PreviewDisplay::PreviewDisplay(IPreviewWindow& window, PreviewMailbox& mailbox,
+                               std::function<void()> request_stop)
+    : window_(window), mailbox_(mailbox), request_stop_(std::move(request_stop)) {}
+
+void PreviewDisplay::pump() {
+  if (std::optional<PreviewItem> item = mailbox_.take(); item && !paused_) {
+    last_image_ = to_bgr(item->image);  // our own copy: drawing never touches the frame
+    last_info_ = item->info;
+    show_last();
+  }
+  handle_key(window_.poll_key());
+  if (window_.closed() && !stop_requested_) {
+    stop_requested_ = true;  // the close button, like q (UIUX 7.2)
+    if (request_stop_) request_stop_();
+  }
+}
+
+void PreviewDisplay::show_last() {
+  if (last_image_.empty()) return;
+  cv::Mat canvas = last_image_.clone();
+  OverlayInfo info = last_info_;
+  info.paused = paused_;
+  info.panel = panel_;
+  draw_overlay(canvas, info);
+  window_.show(canvas);
+}
+
+void PreviewDisplay::handle_key(int key) {
   if (key < 0) return;
   const int code = key & 0xFF;
   if ((code == 'q' || code == kKeyEscape) && !stop_requested_) {
@@ -168,7 +197,7 @@ void PreviewSink::handle_key(int key) {
     show_last();  // the frozen image with (or without) the PAUSED tag
   } else if (code == 'o') {
     panel_ = !panel_;
-    if (paused_) show_last();  // otherwise the next shown frame picks it up
+    show_last();
   }
 }
 

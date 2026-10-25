@@ -95,30 +95,33 @@ class StopOnSignal {
   SignalWatcher& signals_;
 };
 
-// The preview's callbacks reach the pipeline through `pipeline`, which is set before run() starts
+// The preview sink reads the shedding state through `pipeline`, which is set before run() starts
 // the worker thread (thread start orders the write before every call).
-std::unique_ptr<ISink> make_sink(Clock& clock, const RunConfig& config, bool preview,
+std::unique_ptr<ISink> make_sink(Clock& clock, const RunConfig& config, PreviewMailbox* mailbox,
                                  Pipeline* const& pipeline) {
-  if (!preview) return std::make_unique<NullSink>(clock);
-  return std::make_unique<PreviewSink>(
-      clock, std::make_unique<HighGuiWindow>("FrameFlow \u2014 " + config.policy), config.policy,
-      [&pipeline] { return pipeline != nullptr && pipeline->shedding(); },
-      [&pipeline] {
-        if (pipeline != nullptr) pipeline->request_stop();  // q/Esc: like Ctrl+C
-      });
+  if (mailbox == nullptr) return std::make_unique<NullSink>(clock);
+  return std::make_unique<PreviewSink>(clock, *mailbox, config.policy, [&pipeline] {
+    return pipeline != nullptr && pipeline->shedding();
+  });
 }
 
-// The once-per-second work on the thread running Pipeline::run (main): sample memory (D56) and,
-// with --progress, print the status line from atomics (D52). Pipeline threads do no I/O.
+// Work on the thread running Pipeline::run (main), so pipeline threads do no I/O and no GUI:
+// every tick, the preview window (D57); once per second, a memory sample (D56) and, with
+// --progress, the status line from atomics (D52).
 struct Tick {
   Pipeline& pipeline;
   std::ostream* progress;
   ProgressLine& line;
   Clock::duration warmup;
+  PreviewDisplay* display;
   std::optional<std::uint64_t> rss_after_warmup_kb;
+  std::optional<Clock::duration> last_second;
 
   void operator()() {
+    if (display != nullptr) display->pump();
     const Pipeline::LiveStatus status = pipeline.live_status();
+    if (last_second && status.elapsed - *last_second < Pipeline::kTickInterval) return;
+    last_second = status.elapsed;
     if (!rss_after_warmup_kb && status.elapsed >= warmup) {
       rss_after_warmup_kb = read_memory_status().rss_kb;
     }
@@ -145,17 +148,26 @@ MemoryUsage memory_usage(const std::optional<std::uint64_t>& after_warmup_kb) {
 RunReport execute(const RunConfig& config, std::unique_ptr<ISource> source, bool preview,
                   std::ostream* progress, SignalWatcher& signals) {
   SteadyClock clock;                 // outlives the pipeline: the sink holds a reference to it
-  Pipeline* pipeline_ptr = nullptr;  // outlives the pipeline: the preview's callbacks read it
+  Pipeline* pipeline_ptr = nullptr;  // outlives the pipeline: the preview sink reads it
+  PreviewMailbox mailbox;            // outlives the pipeline: the preview sink posts into it
+  // The window lives on this (main) thread: created on its first show, destroyed on return.
+  std::optional<HighGuiWindow> window;
+  if (preview) window.emplace("FrameFlow \u2014 " + config.policy);
   Pipeline pipeline(config.to_pipeline_config(), clock, std::move(source),
-                    make_sink(clock, config, preview, pipeline_ptr));
+                    make_sink(clock, config, preview ? &mailbox : nullptr, pipeline_ptr));
   pipeline_ptr = &pipeline;
+  std::optional<PreviewDisplay> display;
+  if (window) display.emplace(*window, mailbox, [&pipeline] { pipeline.request_stop(); });
   const auto to_clock = [](double s) {
     return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(s));
   };
   ProgressLine line({to_clock(config.run_seconds()), to_clock(config.warmup_s), config.queue},
                     stderr_is_terminal());
-  Tick tick{pipeline, progress, line, to_clock(config.warmup_s), std::nullopt};
-  pipeline.set_tick([&tick] { tick(); });
+  Tick tick{
+      pipeline,     progress,    line, to_clock(config.warmup_s), display ? &*display : nullptr,
+      std::nullopt, std::nullopt};
+  pipeline.set_tick([&tick] { tick(); },
+                    display ? Clock::duration(PreviewDisplay::kInterval) : Pipeline::kTickInterval);
   RunResult result;
   {
     const StopOnSignal stop_on_signal(signals, pipeline);

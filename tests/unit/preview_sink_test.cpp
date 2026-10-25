@@ -6,6 +6,8 @@
 #include <deque>
 #include <memory>
 #include <opencv2/imgproc.hpp>
+#include <optional>
+#include <thread>
 #include <vector>
 
 #include "frameflow/platform/display.hpp"
@@ -73,35 +75,62 @@ TEST(PreviewOverlayTest, PausedTagIsCentredAtTheTop) {
   EXPECT_NEAR(changed.x + changed.width / 2.0, 160, 10);  // centred
 }
 
-// ---------------------------------------------------------------- sink
+// ---------------------------------------------------------------- mailbox (D57)
 
-class FakeWindow final : public IPreviewWindow {
- public:
-  FakeWindow(int& shows, std::deque<int>& keys) : shows_(shows), keys_(keys) {}
-  void show(const cv::Mat& image) override {
-    ++shows_;
-    EXPECT_EQ(image.channels(), 3);
-  }
-  int poll_key() override {
-    if (keys_.empty()) return -1;
-    const int key = keys_.front();
-    keys_.pop_front();
-    return key;
-  }
+PreviewItem item(std::uint64_t id) {
+  PreviewItem out;
+  out.image = cv::Mat(4, 4, CV_8UC3, cv::Scalar::all(static_cast<double>(id)));
+  out.info.age_ms = static_cast<double>(id);
+  return out;
+}
 
- private:
-  int& shows_;
-  std::deque<int>& keys_;
-};
+TEST(PreviewMailboxTest, KeepsOnlyTheNewestItem) {
+  PreviewMailbox mailbox;
+  EXPECT_FALSE(mailbox.take().has_value());
+  for (std::uint64_t id = 0; id < 5; ++id) mailbox.post(item(id));
+  const std::optional<PreviewItem> newest = mailbox.take();
+  ASSERT_TRUE(newest.has_value());
+  EXPECT_EQ(newest->info.age_ms, 4.0);
+  EXPECT_FALSE(mailbox.take().has_value());  // taking empties the slot: nothing is queued
+}
+
+// The worker posts without ever waiting for the display: with nobody taking, 100000 posts finish
+// at once and hold one item.
+TEST(PreviewMailboxTest, PostNeverWaitsForTheReader) {
+  PreviewMailbox mailbox;
+  const auto start = std::chrono::steady_clock::now();
+  for (std::uint64_t id = 0; id < 100'000; ++id) mailbox.post(item(id % 256));
+  EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(2));
+  EXPECT_TRUE(mailbox.take().has_value());
+  EXPECT_FALSE(mailbox.take().has_value());
+}
+
+// Worker and main thread at the same time (run under TSan): the reader only ever sees newer
+// items and finally the last one.
+TEST(PreviewMailboxTest, ConcurrentPostAndTake) {
+  PreviewMailbox mailbox;
+  constexpr int kItems = 20'000;
+  std::thread worker([&] {
+    for (int id = 1; id <= kItems; ++id) mailbox.post(item(static_cast<std::uint64_t>(id)));
+  });
+  double last_seen = 0;
+  while (last_seen < kItems) {
+    if (const std::optional<PreviewItem> taken = mailbox.take()) {
+      ASSERT_GT(*taken->info.age_ms, last_seen);
+      last_seen = *taken->info.age_ms;
+    }
+  }
+  worker.join();
+  EXPECT_EQ(last_seen, kItems);
+}
+
+// ---------------------------------------------------------------- sink (worker side)
 
 struct SinkFixture {
   FakeClock clock{kT0};
-  int shows = 0;
-  std::deque<int> keys;
-  int stops = 0;
+  PreviewMailbox mailbox;
   bool shedding = false;
-  PreviewSink sink{clock, std::make_unique<FakeWindow>(shows, keys), "adaptive",
-                   [this] { return shedding; }, [this] { ++stops; }};
+  PreviewSink sink{clock, mailbox, "adaptive", [this] { return shedding; }};
 
   // Delivers frame `id` captured `age` ago, as the worker would.
   Frame deliver(std::uint64_t id, milliseconds age = milliseconds(20), int channels = 3) {
@@ -112,33 +141,30 @@ struct SinkFixture {
   }
 };
 
-TEST(PreviewSinkTest, StampsOutputTimeBeforeDrawing) {
+TEST(PreviewSinkTest, StampsOutputTimeAndPostsTheFrame) {
   SinkFixture f;
   const Frame frame = f.deliver(0, milliseconds(96));
   EXPECT_EQ(frame.meta.t_out, kT0);
-  EXPECT_EQ(f.shows, 1);
-  ASSERT_TRUE(f.sink.last_overlay().age_ms.has_value());
-  EXPECT_DOUBLE_EQ(*f.sink.last_overlay().age_ms, 96.0);
-  EXPECT_EQ(f.sink.last_overlay().policy, "adaptive");
+  const std::optional<PreviewItem> posted = f.mailbox.take();
+  ASSERT_TRUE(posted.has_value());
+  EXPECT_EQ(posted->image.data, frame.image.data);  // shared pixels: the worker copies nothing
+  ASSERT_TRUE(posted->info.age_ms.has_value());
+  EXPECT_DOUBLE_EQ(*posted->info.age_ms, 96.0);
+  EXPECT_EQ(posted->info.policy, "adaptive");
 }
 
-TEST(PreviewSinkTest, ShowsAtMostAboutThirtyFramesPerSecond) {
+TEST(PreviewSinkTest, EveryFrameIsPostedAndOnlyTheNewestKept) {
   SinkFixture f;
-  f.deliver(0);
-  f.clock.advance(milliseconds(10));
-  f.deliver(1);  // 10 ms later: skipped
-  EXPECT_EQ(f.shows, 1);
-  f.clock.advance(milliseconds(30));
-  f.deliver(2);  // 40 ms after the last shown frame
-  EXPECT_EQ(f.shows, 2);
+  for (std::uint64_t id = 0; id < 5; ++id) f.deliver(id, milliseconds(10 * (id + 1)));
+  const std::optional<PreviewItem> posted = f.mailbox.take();
+  ASSERT_TRUE(posted.has_value());
+  EXPECT_DOUBLE_EQ(*posted->info.age_ms, 50.0);  // frame 4
 }
 
 TEST(PreviewSinkTest, DropsAreEstimatedFromIdGaps) {
   SinkFixture f;
   f.deliver(0);
-  f.clock.advance(milliseconds(40));
   f.deliver(1);
-  f.clock.advance(milliseconds(40));
   f.deliver(3);  // id 2 never arrived: 1 of 4 missing
   EXPECT_DOUBLE_EQ(*f.sink.last_overlay().drop_pct, 25.0);
 }
@@ -153,61 +179,120 @@ TEST(PreviewSinkTest, OutputFpsOverTheLastSecond) {
   EXPECT_NEAR(*f.sink.last_overlay().fps, 20.0, 0.5);
 }
 
-TEST(PreviewSinkTest, AmberBorderFollowsThePolicy) {
+TEST(PreviewSinkTest, ShedddingStateTravelsWithTheFrame) {
   SinkFixture f;
   f.deliver(0);
-  EXPECT_FALSE(f.sink.last_overlay().shedding);
+  EXPECT_FALSE(f.mailbox.take()->info.shedding);
   f.shedding = true;
-  f.clock.advance(milliseconds(40));
   f.deliver(1);
-  EXPECT_TRUE(f.sink.last_overlay().shedding);
+  EXPECT_TRUE(f.mailbox.take()->info.shedding);
 }
 
-TEST(PreviewSinkTest, QuitKeysRequestOneGracefulStop) {
+// ---------------------------------------------------------------- display (main thread)
+
+class FakeWindow final : public IPreviewWindow {
+ public:
+  void show(const cv::Mat& image) override {
+    ++shows;
+    channels = image.channels();
+    last_shown = image.clone();
+  }
+  int poll_key() override {
+    if (keys.empty()) return -1;
+    const int key = keys.front();
+    keys.pop_front();
+    return key;
+  }
+  bool closed() const override { return is_closed; }
+
+  int shows = 0;
+  int channels = 0;
+  cv::Mat last_shown;
+  std::deque<int> keys;
+  bool is_closed = false;
+};
+
+struct DisplayFixture {
+  FakeWindow window;
+  PreviewMailbox mailbox;
+  int stops = 0;
+  PreviewDisplay display{window, mailbox, [this] { ++stops; }};
+
+  void post(double level, int channels = 3) {
+    PreviewItem it;
+    // 320x240: big enough that the bottom-right corner is outside the info panel.
+    it.image = cv::Mat(240, 320, channels == 3 ? CV_8UC3 : CV_8UC1, cv::Scalar::all(level));
+    it.info.panel = false;  // the display decides panel/paused, not the posted info
+    mailbox.post(std::move(it));
+  }
+};
+
+TEST(PreviewDisplayTest, ShowsTheNewestPostedFrameOnly) {
+  DisplayFixture f;
+  f.display.pump();
+  EXPECT_EQ(f.window.shows, 0);  // nothing posted yet
+  f.post(10);
+  f.post(200);
+  f.display.pump();
+  EXPECT_EQ(f.window.shows, 1);
+  EXPECT_EQ(f.window.last_shown.at<cv::Vec3b>(239, 319), cv::Vec3b(200, 200, 200));
+  f.display.pump();
+  EXPECT_EQ(f.window.shows, 1);  // no new frame: nothing redrawn
+}
+
+TEST(PreviewDisplayTest, QuitKeysRequestOneGracefulStop) {
   for (int key : {static_cast<int>('q'), 27}) {
-    SinkFixture f;
-    f.keys = {key, key};
-    f.deliver(0);
-    f.deliver(1);
+    DisplayFixture f;
+    f.window.keys = {key, key};
+    f.display.pump();
+    f.display.pump();
     EXPECT_EQ(f.stops, 1) << key;  // asked once, like the first Ctrl+C
   }
 }
 
-TEST(PreviewSinkTest, SpaceFreezesTheImageWhileFramesKeepFlowing) {
-  SinkFixture f;
-  f.keys = {' '};
-  f.deliver(0);  // shown, then Space: paused (redrawn once with PAUSED)
-  EXPECT_EQ(f.shows, 2);
-  for (std::uint64_t id = 1; id < 5; ++id) {
-    f.clock.advance(milliseconds(40));
-    const Frame frame = f.deliver(id);
-    EXPECT_TRUE(frame.meta.t_out.has_value());  // still delivered and measured
-  }
-  EXPECT_EQ(f.shows, 2);  // but not shown
-  f.keys = {' '};
-  f.clock.advance(milliseconds(40));
-  f.deliver(5);  // Space again: unfreeze (redraw) ...
-  f.clock.advance(milliseconds(40));
-  f.deliver(6);  // ... and the next frame is shown
-  EXPECT_EQ(f.shows, 4);
+TEST(PreviewDisplayTest, ClosingTheWindowRequestsOneStop) {
+  DisplayFixture f;
+  f.window.is_closed = true;
+  f.display.pump();
+  f.display.pump();
+  EXPECT_EQ(f.stops, 1);
 }
 
-TEST(PreviewSinkTest, OKeyTogglesThePanel) {
-  SinkFixture f;
-  f.keys = {'o'};
-  f.deliver(0);
-  f.clock.advance(milliseconds(40));
-  f.deliver(1);
-  f.keys = {'o'};
-  f.clock.advance(milliseconds(40));
-  f.deliver(2);
-  EXPECT_EQ(f.shows, 3);  // toggling never stops frames from being shown
+TEST(PreviewDisplayTest, SpaceFreezesTheShownImage) {
+  DisplayFixture f;
+  f.post(10);
+  f.window.keys = {' '};
+  f.display.pump();  // shows 10, then Space: paused, redrawn with the PAUSED tag
+  EXPECT_TRUE(f.display.paused());
+  EXPECT_EQ(f.window.shows, 2);
+  f.post(200);
+  f.display.pump();
+  EXPECT_EQ(f.window.shows, 2);  // frames keep arriving but are not shown
+  f.window.keys = {' '};
+  f.display.pump();  // unfreeze (redraw of the frozen image)
+  f.post(200);
+  f.display.pump();
+  EXPECT_EQ(f.window.shows, 4);
+  EXPECT_EQ(f.window.last_shown.at<cv::Vec3b>(239, 319), cv::Vec3b(200, 200, 200));
 }
 
-TEST(PreviewSinkTest, GreyFramesAreShownInColour) {
-  SinkFixture f;
-  f.deliver(0, milliseconds(5), 1);  // FakeWindow checks 3 channels
-  EXPECT_EQ(f.shows, 1);
+TEST(PreviewDisplayTest, OKeyTogglesThePanel) {
+  DisplayFixture f;
+  f.post(255);
+  f.display.pump();
+  EXPECT_TRUE(f.display.panel());
+  EXPECT_NE(f.window.last_shown.at<cv::Vec3b>(10, 10), cv::Vec3b(255, 255, 255));  // panel
+  f.window.keys = {'o'};
+  f.display.pump();  // redrawn without the panel
+  EXPECT_FALSE(f.display.panel());
+  EXPECT_EQ(f.window.last_shown.at<cv::Vec3b>(10, 10), cv::Vec3b(255, 255, 255));
+}
+
+TEST(PreviewDisplayTest, GreyFramesAreShownInColour) {
+  DisplayFixture f;
+  f.post(5, 1);
+  f.display.pump();
+  EXPECT_EQ(f.window.channels, 3);
 }
 
 // ---------------------------------------------------------------- display check (ER-06)
