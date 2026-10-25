@@ -1,0 +1,20 @@
+# E5 Adaptive tuning (SPEC 11): the E3 bursty load; T in {50, 100, 200} ms and
+# T_low in {0.5, 0.7, 0.9} x T. Graph drop rate vs p95, plus state switches.
+experiment: e5_tuning
+source: { type: synthetic, resolution: 1280x720, fps: 30 }
+processor: { type: none }
+duration_s: 60
+warmup_s: 3
+repeats: 5
+seed: 42
+queue: 8
+cost_mode: bursty
+cost_ms: 20
+spike_ms: 80
+spike_len: 1s
+spike_every: 5s
+policy: adaptive
+adaptive: { window: 30 }
+matrix:
+  adaptive.target_ms: [50, 100, 200]
+  adaptive.exit_ratio: [0.5, 0.7, 0.9]

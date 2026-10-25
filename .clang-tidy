@@ -1,0 +1,13 @@
+# SR-11: bugprone-*, cert-* and concurrency-* must report zero warnings (product code: src/,
+# include/, bench/). Run by CI and by scripts/check_tidy.sh.
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  concurrency-*,
+  -bugprone-easily-swappable-parameters
+# Disabled (D54): it flags ordinary signatures such as (std::ostream& out, std::ostream& err) or
+# (time_point t0, time_point t_end); avoiding it would need a strong type for every parameter.
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/frameflow/include/frameflow/.*'
+FormatStyle: file

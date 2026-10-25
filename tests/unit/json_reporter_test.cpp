@@ -105,6 +105,23 @@ TEST(JsonReporterTest, ConfigRecordsEffectiveValuesAndSeed) {
   EXPECT_EQ(c["seed"], 7);
 }
 
+// D46: the spike schedule is reproducible from summary.json alone.
+TEST(JsonReporterTest, BurstyConfigRecordsSpikeOffset) {
+  RunConfig config;
+  config.cost_mode = "bursty";
+  config.spike_ms = 80.0;
+  config.spike_len_s = 1.0;
+  config.spike_every_s = 5.0;
+  config.seed = 42;
+  const json c = make_summary_json(config, delivered_report(), fixed_environment(), {})["config"];
+  const double expected =
+      std::chrono::duration<double>(first_spike_offset(std::chrono::seconds(5), 42)).count();
+  EXPECT_DOUBLE_EQ(c["spike_offset_s"].get<double>(), expected);
+  EXPECT_TRUE(make_summary_json(RunConfig{}, delivered_report(), fixed_environment(),
+                                {})["config"]["spike_offset_s"]
+                  .is_null());
+}
+
 TEST(JsonReporterTest, MetricsReuseRunStatsNames) {
   const json m =
       make_summary_json(RunConfig{}, delivered_report(), fixed_environment(), {})["metrics"];
@@ -123,6 +140,45 @@ TEST(JsonReporterTest, MetricsReuseRunStatsNames) {
         "drop_newest_pct", "drop_stale_pct", "depth_mean"}) {
     EXPECT_TRUE(m.contains(key)) << key;
   }
+}
+
+TEST(JsonReporterTest, AdaptiveFieldsAreNullForFixedPolicies) {
+  const json summary = make_summary_json(RunConfig{}, delivered_report(), fixed_environment(), {});
+  for (const char* key : {"target_ms", "exit_ratio", "window"}) {
+    EXPECT_TRUE(summary["config"][key].is_null()) << key;
+  }
+  EXPECT_TRUE(summary["metrics"]["state_changes"].is_null());
+  EXPECT_TRUE(summary["metrics"]["shedding_pct"].is_null());
+}
+
+TEST(JsonReporterTest, AdaptiveFieldsAreRecorded) {
+  RunConfig config;
+  config.policy = "adaptive";
+  config.target_ms = 50.0;
+  config.exit_ratio = 0.5;
+  config.window = 10;
+  RunReport report = delivered_report();
+  report.stats.state_changes = 4;
+  report.stats.shedding_pct = 25.0;
+  const json summary = make_summary_json(config, report, fixed_environment(), {});
+  EXPECT_EQ(summary["config"]["target_ms"], 50.0);
+  EXPECT_EQ(summary["config"]["exit_ratio"], 0.5);
+  EXPECT_EQ(summary["config"]["window"], 10);
+  EXPECT_EQ(summary["metrics"]["state_changes"], 4);
+  EXPECT_EQ(summary["metrics"]["shedding_pct"], 25.0);
+}
+
+TEST(JsonReporterTest, MemoryBlockWithNullsWhenNotSampled) {  // D56
+  RunReport report = delivered_report();
+  const json empty = make_summary_json(RunConfig{}, report, fixed_environment(), {})["memory"];
+  for (const char* key : {"peak_rss_mb", "rss_after_warmup_mb", "rss_end_mb", "growth_pct"}) {
+    EXPECT_TRUE(empty[key].is_null()) << key;
+  }
+  report.memory.peak_rss_mb = 120.5;
+  report.memory.growth_pct = 1.25;
+  const json memory = make_summary_json(RunConfig{}, report, fixed_environment(), {})["memory"];
+  EXPECT_EQ(memory["peak_rss_mb"], 120.5);
+  EXPECT_EQ(memory["growth_pct"], 1.25);
 }
 
 TEST(JsonReporterTest, LatencyIsNullWhenNothingDelivered) {

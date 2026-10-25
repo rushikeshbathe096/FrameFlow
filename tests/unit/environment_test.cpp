@@ -35,6 +35,22 @@ TEST(EnvironmentTest, MemTotalEmptyWhenMissingOrMalformed) {
   EXPECT_EQ(parse_mem_total_mb("MemTotal: 100 MB\n"), std::nullopt);
 }
 
+TEST(EnvironmentTest, ParsesKbFieldsOfProcStatus) {  // D56
+  const std::string status = "Name:\tframeflow\nVmHWM:\t   69720 kB\nVmRSS:\t   6972 kB\n";
+  EXPECT_EQ(parse_kb_field(status, "VmRSS"), 6972u);
+  EXPECT_EQ(parse_kb_field(status, "VmHWM"), 69720u);
+  EXPECT_EQ(parse_kb_field(status, "VmSwap"), std::nullopt);
+  EXPECT_EQ(parse_kb_field("VmRSS: lots kB\n", "VmRSS"), std::nullopt);
+}
+
+TEST(EnvironmentTest, ReadsOwnMemoryStatus) {
+  const MemoryStatus status = read_memory_status();
+  ASSERT_TRUE(status.rss_kb.has_value());
+  ASSERT_TRUE(status.peak_kb.has_value());
+  EXPECT_GT(*status.rss_kb, 0u);
+  EXPECT_GE(*status.peak_kb, *status.rss_kb);  // the peak is never below the current value
+}
+
 TEST(EnvironmentTest, HostnameHashMatchesFnv1aReferenceValues) {
   // Published FNV-1a 64-bit test vectors.
   EXPECT_EQ(hash_hostname(""), "cbf29ce484222325");

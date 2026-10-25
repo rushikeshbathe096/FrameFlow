@@ -27,10 +27,27 @@ void MetricsStore::record_frame(const FrameMeta& meta) {
   }
   frames_[meta.id] = meta;
   recorded_[meta.id] = 1;
+  if (meta.is_dropped()) {
+    ++live_dropped_;
+  } else if (meta.t_out && meta.t_cap) {
+    ++live_delivered_;
+    live_latency_ticks_ = (*meta.t_out - *meta.t_cap).count();
+  }
 }
 
 void MetricsStore::record_depth(Clock::time_point t, std::size_t depth) {
   depth_.push_back(DepthSample{t, depth});
+  live_depth_ = depth;
+}
+
+LiveCounts MetricsStore::live() const {
+  LiveCounts counts;
+  counts.delivered = live_delivered_;
+  counts.dropped = live_dropped_;
+  counts.depth = live_depth_;
+  const Clock::duration::rep ticks = live_latency_ticks_;
+  if (ticks >= 0) counts.last_latency = Clock::duration(ticks);
+  return counts;
 }
 
 std::vector<FrameMeta> MetricsStore::frames() const {

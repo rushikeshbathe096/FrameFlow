@@ -1,0 +1,12 @@
+# PR-01 pacing accuracy (median source lateness < 1 ms, p99 < 5 ms) and PR-02 pipeline overhead
+# (median end-to-end latency < 1 ms): 30 FPS, no processing, no cost, 60 s, 5 repeats (PR-11).
+experiment: pr01_pr02_baseline
+source: { type: synthetic, resolution: 1280x720, fps: 30 }
+processor: { type: none }
+duration_s: 60
+warmup_s: 3
+repeats: 5
+seed: 42
+cost_ms: 0
+queue: 8
+policy: blocking

@@ -8,12 +8,16 @@
 #include <string_view>
 #include <vector>
 
+#include "frameflow/clock.hpp"
+#include "frameflow/policy/adaptive_policy.hpp"
 #include "frameflow/policy/overload_policy.hpp"
 
 namespace frameflow {
 
-// Throws std::invalid_argument for an unknown name; the message lists the valid names.
-std::unique_ptr<OverloadPolicy> make_policy(std::string_view name);
+// Throws std::invalid_argument for an unknown name; the message lists the valid names. The clock
+// and parameters are used by `adaptive` only (the clock must outlive the policy).
+std::unique_ptr<OverloadPolicy> make_policy(std::string_view name, Clock& clock,
+                                            const AdaptiveParams& adaptive = {});
 
 // Registered names in display order (blocking, drop-oldest, drop-newest, ...).
 std::vector<std::string_view> policy_names();

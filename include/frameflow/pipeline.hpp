@@ -9,9 +9,11 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -22,8 +24,10 @@
 #include "frameflow/clock.hpp"
 #include "frameflow/frame.hpp"
 #include "frameflow/metrics/metrics_store.hpp"
+#include "frameflow/policy/adaptive_policy.hpp"
 #include "frameflow/policy/overload_policy.hpp"
 #include "frameflow/processor/cost_model.hpp"
+#include "frameflow/processor/processor.hpp"
 #include "frameflow/sink/sink.hpp"
 #include "frameflow/source/source.hpp"
 
@@ -34,7 +38,11 @@ struct PipelineConfig {
   std::size_t queue_capacity = 8;
   Clock::duration cost{0};
   CostWait cost_wait = CostWait::Busy;
-  std::string policy = "blocking";  // one policy per run, fixed for its whole duration (BR-08)
+  std::optional<BurstConfig> burst;  // set: bursty cost mode (FR-PROC-03)
+  AdaptiveParams adaptive;           // used only when policy == "adaptive"
+  std::string processor = "none";    // FR-PROC-01, created with make_processor
+  int kernel = 15;                   // blur kernel
+  std::string policy = "blocking";   // one policy per run, fixed for its whole duration (BR-08)
   // Exactly one of these must be set (FR-CLI-05).
   std::optional<Clock::duration> duration;
   std::optional<std::uint64_t> frames;
@@ -48,6 +56,8 @@ struct RunResult {
   Clock::time_point t0;        // run start: scheduled release of frame 0
   Clock::time_point t_end;     // when the end condition was reached (shutdown started)
   std::string error;           // "<thread>: <message>" when ended_by == Error
+  // Adaptive policy only: every state change (FR-POL-09); empty optional for other policies.
+  std::optional<std::vector<StateChange>> state_changes;
 };
 
 class Pipeline {
@@ -63,12 +73,26 @@ class Pipeline {
 
   RunResult run();  // may be called once; throws std::logic_error on a second call
   void request_stop();
+  bool shedding() const { return policy_->shedding(); }  // any thread (preview border)
+
+  // `--progress` (D52): set before run(); run() calls it on its own thread about once per
+  // second while waiting for the end, so the callback may do I/O. Keep it short.
+  void set_tick(std::function<void()> tick) { tick_ = std::move(tick); }
+  static constexpr std::chrono::seconds kTickInterval{1};
+
+  struct LiveStatus {
+    Clock::duration elapsed{0};  // since t0
+    LiveCounts counts;
+    bool shedding = false;
+  };
+  LiveStatus live_status() const;  // any thread, after run() has started
   const MetricsStore& metrics() const { return metrics_; }
 
  private:
   void source_main();
   void worker_main();
   void report_error(const std::string& message);
+  bool wait_for_end(bool& duration_reached);
   void shutdown();  // the single shutdown routine: stop flag + queue shutdown
   void join_threads();
   void record_in_flight();
@@ -81,7 +105,8 @@ class Pipeline {
   MetricsStore metrics_;  // declared before queue_: the queue's depth callback writes into it
   const std::unique_ptr<OverloadPolicy> policy_;  // before queue_: the queue references it
   BoundedQueue<FramePtr> queue_;
-  const CostModel cost_;
+  const std::unique_ptr<IProcessor> processor_;
+  CostModel cost_;  // start(t0_) is called in run() before the worker thread starts
 
   std::atomic<bool> stop_{false};  // read by the source loop
   Clock::time_point t0_;
@@ -93,6 +118,7 @@ class Pipeline {
   bool stop_requested_ = false;
   std::string error_;
 
+  std::function<void()> tick_;
   bool started_ = false;
   std::thread source_thread_;
   std::thread worker_thread_;

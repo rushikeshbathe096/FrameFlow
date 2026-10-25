@@ -59,7 +59,7 @@ class FdStreamBuf final : public std::streambuf {
 
   int fd_;
   int error_ = 0;
-  std::array<char, 64 * 1024> buffer_{};
+  std::array<char, std::size_t{64} * 1024> buffer_{};
 };
 
 // Closes the fd on every path, including exceptions from the write body.
@@ -76,6 +76,9 @@ class FdGuard {
  private:
   int fd_;
 };
+
+// Thread-safe replacement for strerror (concurrency-mt-unsafe).
+std::string os_message(int error) { return std::generic_category().message(error); }
 
 void print_error(std::ostream& err, const std::string& what, const std::string& hint) {
   err << "frameflow: error: " << what << " (hint: " << hint << ")\n";
@@ -143,7 +146,7 @@ bool create_dir(const fs::path& dir, std::ostream& err) {
   }
   if (::mkdir(dir.c_str(), 0755) != 0) {  // umask applies (SR-AUTH-04)
     const int error = errno;
-    print_error(err, "cannot create output folder: " + dir.string() + ": " + std::strerror(error),
+    print_error(err, "cannot create output folder: " + dir.string() + ": " + os_message(error),
                 error == EACCES ? "check that you can write to " + dir.parent_path().string()
                                 : "choose another --out");
     return false;
@@ -155,6 +158,7 @@ bool create_dir(const fs::path& dir, std::ostream& err) {
 
 std::vector<fs::path> default_allowed_roots() {
   std::vector<fs::path> roots;
+  // NOLINTNEXTLINE(concurrency-mt-unsafe): main thread, before any pipeline thread; no setenv
   if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
     roots.emplace_back(home);
   }
@@ -168,7 +172,7 @@ fs::path next_run_dir(const fs::path& root) {
   std::error_code ec;
   for (int n = 1;; ++n) {
     char name[16];
-    std::snprintf(name, sizeof(name), "run_%03d", n);
+    (void)std::snprintf(name, sizeof(name), "run_%03d", n);
     const fs::path candidate = root / name;
     if (!fs::exists(fs::symlink_status(candidate, ec))) return candidate;
   }
@@ -201,19 +205,19 @@ void write_to_fd(int fd, const fs::path& name, const WriteBody& body) {
   out.flush();
   if (!out) {
     throw std::runtime_error("cannot write " + name.string() + ": " +
-                             std::strerror(buffer.error() != 0 ? buffer.error() : EIO));
+                             os_message(buffer.error() != 0 ? buffer.error() : EIO));
   }
 }
 
 void write_result_file(const fs::path& path, const WriteBody& body) {
   const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
   if (fd < 0) {
-    throw std::runtime_error("cannot create " + path.string() + ": " + std::strerror(errno));
+    throw std::runtime_error("cannot create " + path.string() + ": " + os_message(errno));
   }
   FdGuard guard(fd);
   write_to_fd(fd, path, body);
   if (::close(guard.release()) != 0) {
-    throw std::runtime_error("cannot write " + path.string() + ": " + std::strerror(errno));
+    throw std::runtime_error("cannot write " + path.string() + ": " + os_message(errno));
   }
 }
 

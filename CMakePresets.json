@@ -49,13 +49,24 @@
         "FRAMEFLOW_SANITIZER": "tsan",
         "CMAKE_CROSSCOMPILING_EMULATOR": "setarch;-R"
       }
+    },
+    {
+      "name": "coverage",
+      "inherits": "base",
+      "displayName": "Coverage (gcov, -O0)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS_DEBUG": "-O0 -g",
+        "FRAMEFLOW_COVERAGE": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
-    { "name": "tsan", "configurePreset": "tsan" }
+    { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "coverage", "configurePreset": "coverage" }
   ],
   "testPresets": [
     {
@@ -104,6 +115,12 @@
       "name": "tsan-long",
       "inherits": "tsan-env",
       "filter": { "include": { "label": "long|stress" } }
+    },
+    {
+      "name": "coverage",
+      "inherits": "base",
+      "configurePreset": "coverage",
+      "filter": { "exclude": { "label": "timing|long|stress" } }
     }
   ]
 }

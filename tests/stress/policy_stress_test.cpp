@@ -1,6 +1,7 @@
-// SR-04 (stress part): 60 s of overloaded runs, 20 s per policy, with a one-frame queue so the
-// source and worker contend on the queue lock on almost every frame. Run under TSan in the
-// tsan-long preset; BR-01..BR-04 must hold for each run. Label `stress` (D10, D37).
+// SR-04 (stress part): 80 s of overloaded runs, 20 s per policy (adaptive added in P4.5), with
+// a one-frame queue so the source and worker contend on the queue lock on almost every frame. Run
+// under TSan in the tsan-long preset; BR-01..BR-04 must hold for each run. Label `stress` (D10,
+// D37).
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -35,13 +36,13 @@ TEST_P(StressPolicyTest, TwentySecondsAtTwiceOverloadWithQueueOfOne) {
   EXPECT_GT(counts.delivered, 0u);
   if (GetParam() == "blocking") {
     EXPECT_EQ(counts.dropped, 0u);
-  } else {
+  } else if (GetParam() != "adaptive") {  // adaptive: latency stays below T, so it may not shed
     EXPECT_GT(counts.dropped, 0u);
   }
 }
 
 INSTANTIATE_TEST_SUITE_P(StressPolicy, StressPolicyTest,
-                         ::testing::Values("blocking", "drop-oldest", "drop-newest"),
+                         ::testing::Values("blocking", "drop-oldest", "drop-newest", "adaptive"),
                          [](const auto& info) {
                            std::string name = info.param;
                            name.erase(std::remove(name.begin(), name.end(), '-'), name.end());

@@ -1,5 +1,7 @@
 #include "frameflow/metrics/json_reporter.hpp"
 
+#include <chrono>
+#include <filesystem>
 #include <optional>
 #include <stdexcept>
 
@@ -33,20 +35,45 @@ const char* ended_by_name(EndedBy ended_by) {
   return "error";
 }
 
+// First spike's offset from the run start (D39), so analysis can rebuild the spike schedule (D46).
+std::optional<double> spike_offset_s(const RunConfig& config) {
+  if (!config.spike_every_s) return std::nullopt;
+  const PipelineConfig pipeline = config.to_pipeline_config();
+  if (!pipeline.burst) return std::nullopt;
+  return std::chrono::duration<double>(first_spike_offset(pipeline.burst->every, config.seed))
+      .count();
+}
+
+// SR-08: only the file name, never a path outside the output folder.
+json input_name(const std::optional<std::string>& input) {
+  if (!input) return nullptr;
+  return std::filesystem::path(*input).filename().string();
+}
+
 json config_json(const RunConfig& config) {
   return {{"fps", config.fps},
           {"queue", config.queue},
           {"duration_s", or_null(config.duration_s)},
           {"frames", or_null(config.frames)},
           {"warmup_s", config.warmup_s},
+          {"processor", config.processor},
+          {"kernel", config.processor == "blur" ? json(config.kernel) : json(nullptr)},
           {"cost_ms", config.cost_ms},
           {"cost_mode", config.cost_mode},
           {"cost_wait", config.cost_wait == CostWait::Busy ? "busy" : "sleep"},
+          {"spike_ms", or_null(config.spike_ms)},
+          {"spike_len_s", or_null(config.spike_len_s)},
+          {"spike_every_s", or_null(config.spike_every_s)},
+          {"spike_offset_s", or_null(spike_offset_s(config))},
           {"policy", config.policy},
+          {"target_ms", or_null(config.target_ms)},
+          {"exit_ratio", or_null(config.exit_ratio)},
+          {"window", or_null(config.window)},
           {"resolution", std::to_string(config.resolution.width) + "x" +
                              std::to_string(config.resolution.height)},
           {"source", config.source},
-          {"input", or_null(config.input)},
+          {"input", input_name(config.input)},
+          {"loop", config.loop},
           {"seed", config.seed}};
 }
 
@@ -82,7 +109,16 @@ json metrics_json(const RunStats& s) {
           {"drop_newest_pct", or_null(s.drop_newest_pct)},
           {"drop_stale_pct", or_null(s.drop_stale_pct)},
           {"depth_mean", or_null(s.depth_mean)},
-          {"depth_max", or_null(s.depth_max)}};
+          {"depth_max", or_null(s.depth_max)},
+          {"state_changes", or_null(s.state_changes)},
+          {"shedding_pct", or_null(s.shedding_pct)}};
+}
+
+json memory_json(const MemoryUsage& m) {
+  return {{"peak_rss_mb", or_null(m.peak_rss_mb)},
+          {"rss_after_warmup_mb", or_null(m.rss_after_warmup_mb)},
+          {"rss_end_mb", or_null(m.rss_end_mb)},
+          {"growth_pct", or_null(m.growth_pct)}};
 }
 
 }  // namespace
@@ -98,7 +134,8 @@ nlohmann::json make_summary_json(const RunConfig& config, const RunReport& repor
           {"warnings", warnings},
           {"config", config_json(config)},
           {"environment", environment_json(env)},
-          {"metrics", metrics_json(report.stats)}};
+          {"metrics", metrics_json(report.stats)},
+          {"memory", memory_json(report.memory)}};
 }
 
 void write_summary_json(const std::filesystem::path& dir, const nlohmann::json& summary) {

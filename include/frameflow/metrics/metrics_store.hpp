@@ -5,11 +5,14 @@
 // Thread-safety: record_frame() may be called concurrently from several threads as long as each
 // frame id is recorded exactly once (each call writes only its own slot). record_depth() is not
 // synchronised: callers must serialise it (the queue calls it under its own lock). Readers must
-// run after all writers have finished (e.g. after the threads are joined).
+// run after all writers have finished (e.g. after the threads are joined), except live(), which
+// reads only atomics and may be called from any thread at any time (`--progress`, D52).
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "frameflow/clock.hpp"
@@ -24,6 +27,14 @@ struct DepthSample {
 
 // Expected frame count for a run, with 10% headroom (DR-09): ceil(fps x duration_s x 1.1).
 std::size_t frame_capacity_for(double fps, double duration_s);
+
+// Running totals for `--progress`, readable while the pipeline runs.
+struct LiveCounts {
+  std::uint64_t delivered = 0;
+  std::uint64_t dropped = 0;
+  std::size_t depth = 0;                        // latest queue depth sample
+  std::optional<Clock::duration> last_latency;  // of the most recently recorded delivered frame
+};
 
 class MetricsStore {
  public:
@@ -40,11 +51,18 @@ class MetricsStore {
   std::vector<FrameMeta> frames() const;
   const std::vector<DepthSample>& depth_samples() const { return depth_; }
   std::size_t frame_capacity() const { return frames_.size(); }
+  LiveCounts live() const;  // any thread
 
  private:
   std::vector<FrameMeta> frames_;
   std::vector<std::uint8_t> recorded_;  // not vector<bool>: its bits share bytes across ids
   std::vector<DepthSample> depth_;
+
+  // Written by the recording threads, read by live(): plain counters, no ordering needed.
+  std::atomic<std::uint64_t> live_delivered_{0};
+  std::atomic<std::uint64_t> live_dropped_{0};
+  std::atomic<std::size_t> live_depth_{0};
+  std::atomic<Clock::duration::rep> live_latency_ticks_{-1};  // -1: nothing delivered yet
 };
 
 }  // namespace frameflow

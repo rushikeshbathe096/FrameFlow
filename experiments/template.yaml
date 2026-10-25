@@ -1,0 +1,13 @@
+# FrameFlow experiment — copy and edit (UIUX 8.3, docs/DESIGN.md D40-D42)
+experiment: my_experiment      # folder name under --out
+source: { type: synthetic, resolution: 1280x720, fps: 30 }
+processor: { type: none }      # none = cost model only; or grayscale, blur, canny
+duration_s: 60                 # 1-3600
+warmup_s: 3                    # excluded from statistics
+repeats: 5                     # runs per configuration
+seed: 42
+matrix:                        # every combination is run
+  cost_ms: [40, 50, 67]
+  policy: [blocking, drop-oldest, drop-newest, adaptive]
+  queue: [8]
+adaptive: { target_ms: 100, exit_ratio: 0.7, window: 30 }

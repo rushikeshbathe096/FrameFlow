@@ -69,9 +69,10 @@ void write_depth_csv(std::ostream& out, const std::vector<DepthSample>& samples,
   }
 }
 
-void write_events_csv(std::ostream& out, const std::vector<Event>& events, Clock::time_point t0) {
+void write_events_csv(std::ostream& out, const std::vector<RunEvent>& events,
+                      Clock::time_point t0) {
   out << "t_us,type,frame_id,detail\n";
-  for (const Event& event : events) {
+  for (const RunEvent& event : events) {
     put_time_us(out, event.t, t0);
     out << ',' << event.type << ',';
     if (event.frame_id) put_int(out, static_cast<long long>(*event.frame_id));

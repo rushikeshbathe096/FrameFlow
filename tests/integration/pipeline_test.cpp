@@ -5,6 +5,9 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
+#include <opencv2/core/utility.hpp>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -246,6 +249,85 @@ TEST(PipelineTest, DropNewestDropsUnderOverload) {
 
 TEST(PipelineTest, BlockingNeverDropsUnderOverload) {
   EXPECT_EQ(run_overloaded("blocking").dropped, 0u);
+}
+
+// P5.3: real OpenCV processing on the worker thread keeps every invariant (and is TSan-clean
+// with the TBB suppression); the delivered image is the processed one.
+TEST(PipelineTest, RunsWithEachRealProcessor) {
+  for (const char* processor : {"grayscale", "blur", "canny"}) {
+    SteadyClock clock;
+    PipelineConfig config = frames_config(20, 200.0);
+    config.processor = processor;
+    config.kernel = 5;
+    int channels = 0;
+    class ChannelSink final : public ISink {
+     public:
+      ChannelSink(Clock& clock, int& channels) : clock_(clock), channels_(channels) {}
+      void consume(Frame& frame) override {
+        frame.meta.t_out = clock_.now();
+        channels_ = frame.image.channels();
+      }
+
+     private:
+      Clock& clock_;
+      int& channels_;
+    };
+    Pipeline pipeline(config, clock, std::make_unique<SyntheticSource>(cv::Size(320, 240)),
+                      std::make_unique<ChannelSink>(clock, channels));
+    const RunResult result = pipeline.run();
+    testing::expect_run_invariants(pipeline.metrics(), result.produced);
+    EXPECT_EQ(channels, std::string(processor) == "blur" ? 3 : 1) << processor;
+  }
+}
+
+// D50: after a Pipeline is built, OpenCV's parallel loops run on the calling thread only.
+TEST(PipelineTest, TurnsOffOpenCvThreadPool) {
+  cv::setNumThreads(8);
+  SteadyClock clock;
+  Pipeline pipeline(frames_config(1), clock, small_source(), std::make_unique<NullSink>(clock));
+  std::mutex mutex;
+  std::set<std::thread::id> threads;
+  cv::parallel_for_(cv::Range(0, 16), [&](const cv::Range&) {
+    std::this_thread::sleep_for(milliseconds(2));  // long enough for a pool to spread the work
+    std::lock_guard<std::mutex> lock(mutex);
+    threads.insert(std::this_thread::get_id());
+  });
+  EXPECT_EQ(threads, std::set<std::thread::id>{std::this_thread::get_id()});
+}
+
+// D52: the tick runs on the run() thread about once per second, reads live counters that match
+// the final records, and does not change how the run ends.
+TEST(PipelineTest, TickRunsOncePerSecondWithLiveCounts) {
+  SteadyClock clock;
+  PipelineConfig config = duration_config(milliseconds(2500), 100.0);
+  config.cost = milliseconds(15);
+  config.queue_capacity = 2;
+  config.policy = "drop-oldest";
+  Pipeline pipeline(config, clock, small_source(), std::make_unique<NullSink>(clock));
+  const std::thread::id runner = std::this_thread::get_id();
+  std::vector<Pipeline::LiveStatus> ticks;
+  pipeline.set_tick([&] {
+    EXPECT_EQ(std::this_thread::get_id(), runner);  // never a pipeline thread
+    ticks.push_back(pipeline.live_status());
+  });
+  const RunResult result = pipeline.run();
+  EXPECT_EQ(result.ended_by, EndedBy::Duration);
+  ASSERT_EQ(ticks.size(), 2u);  // at about 1 s and 2 s of a 2.5 s run
+  EXPECT_GE(ticks[0].elapsed, std::chrono::seconds(1));
+  EXPECT_LE(ticks[0].counts.delivered, ticks[1].counts.delivered);
+  EXPECT_GT(ticks[1].counts.dropped, 0u);
+  const testing::FrameCounts counts = expect_run_invariants(pipeline.metrics(), result.produced);
+  const LiveCounts live = pipeline.metrics().live();
+  EXPECT_EQ(live.delivered, counts.delivered);
+  EXPECT_EQ(live.dropped, counts.dropped);
+}
+
+TEST(PipelineTest, UnknownProcessorIsRejected) {
+  SteadyClock clock;
+  PipelineConfig config = frames_config(2);
+  config.processor = "sharpen";
+  EXPECT_THROW(Pipeline(config, clock, small_source(), std::make_unique<NullSink>(clock)),
+               std::invalid_argument);
 }
 
 TEST(PipelineTest, SecondRunIsRejected) {

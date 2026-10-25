@@ -44,7 +44,7 @@ void count_window(const FrameMeta& meta, RunStats& stats, std::vector<double>& l
     case DropReason::None:
       break;
   }
-  if (!meta.t_out) return;  // in flight
+  if (!meta.t_out || !meta.t_cap) return;  // in flight
   ++stats.window_delivered;
   latencies_ms.push_back(
       std::chrono::duration<double, std::milli>(*meta.t_out - *meta.t_cap).count());

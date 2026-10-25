@@ -1,0 +1,15 @@
+# PR-07 memory bound (peak RSS vs base + (queue + 2) x frame size + metrics store) and PR-08
+# memory stability (RSS after warm-up grows by at most 5% in a 10-minute run), under each
+# policy at 1.5x overload; 5 repeats (PR-11): 4 x 5 x 10 min, about 3 h 20 min.
+experiment: pr07_pr08_memory
+source: { type: synthetic, resolution: 1280x720, fps: 30 }
+processor: { type: none }
+duration_s: 600
+warmup_s: 3
+repeats: 5
+seed: 42
+cost_ms: 50
+queue: 8
+matrix:
+  policy: [blocking, drop-oldest, drop-newest, adaptive]
+adaptive: { target_ms: 100, exit_ratio: 0.7, window: 30 }

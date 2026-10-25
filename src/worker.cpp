@@ -4,9 +4,15 @@
 
 namespace frameflow {
 
-Worker::Worker(BoundedQueue<FramePtr>& queue, const CostModel& cost, ISink& sink, Clock& clock,
-               MetricsStore& metrics)
-    : queue_(queue), cost_(cost), sink_(sink), clock_(clock), metrics_(metrics) {}
+Worker::Worker(BoundedQueue<FramePtr>& queue, const IProcessor& processor, const CostModel& cost,
+               ISink& sink, Clock& clock, MetricsStore& metrics, OverloadPolicy& policy)
+    : queue_(queue),
+      processor_(processor),
+      cost_(cost),
+      sink_(sink),
+      clock_(clock),
+      metrics_(metrics),
+      policy_(policy) {}
 
 void Worker::run() {
   while (true) {
@@ -15,6 +21,9 @@ void Worker::run() {
       if (queue_.is_shutdown()) return;
       continue;  // timeout: keep waiting
     }
+    const Clock::time_point popped = clock_.now();
+    (*frame)->meta.t_pop = popped;
+    if (drop_if_stale(**frame, popped)) continue;
     try {
       process(**frame);
     } catch (...) {
@@ -26,12 +35,24 @@ void Worker::run() {
   }
 }
 
+bool Worker::drop_if_stale(Frame& frame, Clock::time_point popped) {
+  if (!policy_.should_drop_on_pop(frame.meta, popped)) return false;
+  frame.meta.drop_reason = DropReason::Stale;
+  frame.meta.t_drop = popped;
+  metrics_.record_frame(frame.meta);
+  return true;
+}
+
 void Worker::process(Frame& frame) {
-  frame.meta.t_pop = clock_.now();
   frame.meta.t_proc_start = clock_.now();
-  cost_.apply();  // processor `none`: the synthetic cost is the only work
+  processor_.process(frame.image);
+  cost_.apply();  // synthetic cost on top (0 by default)
   frame.meta.t_proc_end = clock_.now();
   sink_.consume(frame);
+  if (frame.meta.t_out && frame.meta.t_cap) {
+    policy_.on_delivered(*frame.meta.t_out - *frame.meta.t_cap,
+                         *frame.meta.t_proc_end - *frame.meta.t_proc_start, *frame.meta.t_out);
+  }
 }
 
 }  // namespace frameflow

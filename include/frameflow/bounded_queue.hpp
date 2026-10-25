@@ -63,7 +63,9 @@ class BoundedQueue {
         report_depth();
         return PushResult::Dropped;
       }
-      if (decision == PushDecision::DropOldest && full) {
+      if (decision == PushDecision::DropStale) drop_stale();  // FR-POL-08, may leave it full
+      if ((decision == PushDecision::DropOldest || decision == PushDecision::DropStale) &&
+          items_.size() >= capacity_) {
         T oldest = std::move(items_.front());
         items_.pop_front();
         drop(std::move(oldest), DropReason::Oldest);
@@ -126,6 +128,20 @@ class BoundedQueue {
 
  private:
   QueueView view() const { return QueueView{items_.size(), capacity_}; }  // caller holds mutex_
+
+  // Removes, in queue order, every item the policy calls stale (reason `stale`). Caller holds
+  // mutex_.
+  void drop_stale() {
+    for (auto it = items_.begin(); it != items_.end();) {
+      if (policy_.is_stale((*it)->meta)) {
+        T stale = std::move(*it);
+        it = items_.erase(it);
+        drop(std::move(stale), DropReason::Stale);
+      } else {
+        ++it;
+      }
+    }
+  }
 
   void report_depth() {  // caller holds mutex_
     if (on_depth_) on_depth_(items_.size());

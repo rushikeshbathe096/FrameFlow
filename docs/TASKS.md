@@ -158,42 +158,42 @@ capability changes). SR-02 (warning and hardening flags) was done in Phase 0.
 
 ## Phase 3: Benchmark harness
 
-- [ ] **P3.1** `CostModel` bursty mode with seeded, reproducible spike schedule
+- [x] **P3.1** `CostModel` bursty mode with seeded, reproducible spike schedule
   - Files: `include/frameflow/processor/cost_model.hpp`, `src/processor/cost_model.cpp`, `src/config.cpp`, `tests/unit/cost_model_test.cpp`
   - Reqs: FR-PROC-03, FR-PROC-04, VR-06
   - Verify: FakeClock: spikes at configured period and length; same seed gives same schedule (D5); debug
   - Write it myself: no
-- [ ] **P3.2** YAML config for `run --config`, flags override config
+- [x] **P3.2** YAML config for `run --config`, flags override config
   - Files: `include/frameflow/config_file.hpp`, `src/config_file.cpp`, `tests/unit/config_file_test.cpp`, `CMakeLists.txt` (yaml-cpp), `.github/workflows/ci.yml` (apt: `libyaml-cpp-dev`)
   - Reqs: FR-CLI-01, VR-18, SR-07, EC-19
   - Verify: unknown key rejected with file:line:col; >1 MB rejected; flag beats config; debug+asan
   - Write it myself: no
-- [ ] **P3.3** Experiment matrix: parse and expand to configurations, write `experiment.json`
+- [x] **P3.3** Experiment matrix: parse and expand to configurations, write `experiment.json`
   - Files: `include/frameflow/bench/experiment.hpp`, `src/bench/experiment.cpp`, `tests/unit/experiment_test.cpp`
   - Reqs: DR-05 (matrix part)
   - Verify: cartesian product count and order; config names stable; debug
   - Write it myself: no
-- [ ] **P3.4** `BenchRunner` + `frameflow bench`: repeats, `rep_<n>` folders, progress (S5), interruption
+- [x] **P3.4** `BenchRunner` + `frameflow bench`: repeats, `rep_<n>` folders, progress (S5), interruption
   - Files: `include/frameflow/bench/bench_runner.hpp`, `src/bench/bench_runner.cpp`, `src/cli.cpp`, `tests/integration/bench_test.cpp`
   - Reqs: FR-CLI-02, VR-19, DR-05, BR-11, EC-20
   - Verify: tiny matrix (2 configs x 2 repeats x 1 s) layout; interrupted bench lists missing runs; debug+tsan
   - Write it myself: no
-- [ ] **P3.5** Experiment files E1, E2, E4, `template.yaml`, `scripts/run_all.sh`
+- [x] **P3.5** Experiment files E1, E2, E4, `template.yaml`, `scripts/run_all.sh`
   - Files: `experiments/e1_baseline.yaml`, `experiments/e2_sustained.yaml`, `experiments/e4_capacity.yaml`, `experiments/template.yaml`, `scripts/run_all.sh`
   - Reqs: SPEC 11 (E1, E2, E4)
   - Verify: each file loads and expands in a unit test; `run_all.sh --dry-run`; debug
   - Write it myself: no
-- [ ] **P3.6** `analyze.py` part 1: load results, summary tables (CSV + Markdown), median/min/max, errors
+- [x] **P3.6** `analyze.py` part 1: load results, summary tables (CSV + Markdown), median/min/max, errors
   - Files: `scripts/analyze.py`, `scripts/tests/test_analyze.py`, `.github/workflows/ci.yml` (apt: `python3-pytest python3-pandas python3-matplotlib`, pytest step)
   - Reqs: FR-ANA-01 (tables), FR-ANA-02, FR-ANA-03, ER-09, BR-11
   - Verify: pytest on fixture results (D7); missing/malformed file names file and column
   - Write it myself: no
-- [ ] **P3.7** `analyze.py` part 2: `latency_over_time.png`, `depth_over_time.png` per UIUX 6.3
+- [x] **P3.7** `analyze.py` part 2: `latency_over_time.png`, `depth_over_time.png` per UIUX 6.3
   - Files: `scripts/analyze.py`, `scripts/tests/test_analyze.py`
   - Reqs: FR-ANA-01 (graphs)
   - Verify: pytest checks files created with expected size; manual look at one chart
   - Write it myself: no
-- [ ] **P3.8** `frameflow_bench_queue` micro-benchmark *(placement)*
+- [x] **P3.8** `frameflow_bench_queue` micro-benchmark *(placement)*
   - Files: `bench/bench_queue.cpp`, `CMakeLists.txt`
   - Reqs: PR-03 (tool only; measured in P5.9)
   - Verify: builds in release; runs and prints median; no number recorded until measured
@@ -206,32 +206,32 @@ capability changes). SR-02 (warning and hardening flags) was done in Phase 0.
 
 ## Phase 4: Adaptive policy
 
-- [ ] **P4.1** Latency estimator: p95 of the last W delivered latencies (ring buffer)
+- [x] **P4.1** Latency estimator: p95 of the last W delivered latencies (ring buffer)
   - Files: `include/frameflow/policy/latency_window.hpp`, `tests/unit/latency_window_test.cpp`
   - Reqs: FR-POL-05, EC-14
   - Verify: fewer than W samples uses all; window slides; nearest-rank p95; debug+asan
   - Write it myself: **yes**
-- [ ] **P4.2** `AdaptivePolicy` hysteresis state machine NORMAL/SHEDDING with state-change events
+- [x] **P4.2** `AdaptivePolicy` hysteresis state machine NORMAL/SHEDDING with state-change events
   - Files: `include/frameflow/policy/adaptive_policy.hpp`, `src/policy/adaptive_policy.cpp`, `tests/unit/adaptive_policy_test.cpp`
   - Reqs: FR-POL-06, FR-POL-07, FR-POL-09, BR-07, EC-13
   - Verify: FakeClock: enters above T, exits below T_low, no flapping inside the band; NORMAL never drops; debug+tsan
   - Write it myself: **yes**
-- [ ] **P4.3** Shedding on push: drop queued frames older than T (reason `stale`), then oldest if still full
+- [x] **P4.3** Shedding on push: drop queued frames older than T (reason `stale`), then oldest if still full
   - Files: `src/policy/adaptive_policy.cpp`, `include/frameflow/bounded_queue.hpp`, `tests/unit/adaptive_policy_test.cpp`
   - Reqs: FR-POL-08 (push part), FR-POL-10
   - Verify: stale frames removed in order, fresh kept; capacity respected; debug+tsan+asan
   - Write it myself: **yes**
-- [ ] **P4.4** Stale-on-pop in worker and latency feedback from sink to policy
+- [x] **P4.4** Stale-on-pop in worker and latency feedback from sink to policy
   - Files: `src/worker.cpp`, `src/policy/adaptive_policy.cpp`, `tests/unit/adaptive_policy_test.cpp`, `tests/unit/worker_test.cpp`
   - Reqs: FR-POL-08 (pop part), FR-POL-10, BR-07
   - Verify: stale dropped on pop only while SHEDDING; policy state shared by source and worker threads is race-free; debug+tsan
   - Write it myself: **yes**
-- [ ] **P4.5** Register adaptive; `--target-ms`, `--exit-ratio`, `--window`; adaptive row in console and summary
+- [x] **P4.5** Register adaptive; `--target-ms`, `--exit-ratio`, `--window`; adaptive row in console and summary
   - Files: `src/policy/policy_factory.cpp`, `src/config.cpp`, `src/cli.cpp`, `src/ui/console_reporter.cpp`, `src/metrics/stats.cpp`, tests
   - Reqs: FR-POL-01 (all four), VR-08, VR-09, VR-10, FR-MET-04 (state changes)
   - Verify: pass/fail test per new rule; integration run per policy incl. adaptive; debug+tsan
   - Write it myself: no
-- [ ] **P4.6** E3, E5 experiment files; `analyze.py` trade-off scatter, recovery time, drops outside spikes, state switches
+- [x] **P4.6** E3, E5 experiment files; `analyze.py` trade-off scatter, recovery time, drops outside spikes, state switches
   - Files: `experiments/e3_bursty.yaml`, `experiments/e5_tuning.yaml`, `scripts/analyze.py`, `scripts/tests/test_analyze.py`
   - Reqs: SPEC 10 (recovery time), SPEC 11 E3/E5
   - Verify: pytest on fixtures; experiment files expand in unit test
@@ -244,27 +244,27 @@ capability changes). SR-02 (warning and hardening flags) was done in Phase 0.
 
 ## Phase 5: Real load, polish, report
 
-- [ ] **P5.1** `VideoFileSource`: open, decode, loop / `--no-loop`, early end; generated test clip
+- [x] **P5.1** `VideoFileSource`: open, decode, loop / `--no-loop`, early end; generated test clip
   - Files: `include/frameflow/source/video_file_source.hpp`, `src/source/video_file_source.cpp`, `tests/unit/video_file_source_test.cpp`, `src/config.cpp`
   - Reqs: FR-SRC-01, FR-SRC-06, VR-14, VR-15, EC-04, EC-05, EC-06
   - Verify: tests write a short clip with `cv::VideoWriter` (no downloaded files); exit 3 on undecodable; debug+asan
   - Write it myself: no
-- [ ] **P5.2** Decode-error retry and corrupted input handling
+- [x] **P5.2** Decode-error retry and corrupted input handling
   - Files: `src/source/video_file_source.cpp`, `tests/unit/video_file_source_test.cpp`
   - Reqs: ER-03, EC-07, SR-01
   - Verify: truncated/corrupted clips never crash; retry 3 then stop with `valid=false`, exit 1; debug+asan
   - Write it myself: no
-- [ ] **P5.3** `IProcessor` + `none`, `grayscale`, `blur`, `canny` + factory; `--processor`, `--kernel`
+- [x] **P5.3** `IProcessor` + `none`, `grayscale`, `blur`, `canny` + factory; `--processor`, `--kernel`
   - Files: `include/frameflow/processor/*.hpp`, `src/processor/*.cpp`, `tests/unit/processor_test.cpp`
   - Reqs: FR-PROC-01, VR-11, VR-12, RR-06
   - Verify: output size/type per processor; even kernel rejected; debug+tsan (TBB suppression applies)
   - Write it myself: no
-- [ ] **P5.4** `PreviewSink` with overlay, keys, display check
+- [x] **P5.4** `PreviewSink` with overlay, keys, display check
   - Files: `include/frameflow/sink/preview_sink.hpp`, `src/sink/preview_sink.cpp`, `tests/unit/preview_sink_test.cpp`
   - Reqs: FR-CLI-07, ER-06
   - Verify: overlay drawn on an off-screen Mat in tests; exit 6 with no display; `--preview=auto` warns; demo by you
   - Write it myself: no
-- [ ] **P5.5** `--progress`: one status line per second on stderr (UIUX S3)
+- [x] **P5.5** `--progress`: one status line per second on stderr (UIUX S3)
   - Files: `include/frameflow/ui/progress.hpp`, `src/ui/progress.cpp`, `src/cli.cpp`, `src/pipeline.cpp`, `tests/unit/progress_test.cpp`
   - Reqs: none in SRS; UIUX S3, ARCHITECTURE 10 (decision D6)
   - Verify: line formatting from a counter snapshot; main thread reads atomic counters only (no I/O on source/worker); debug+tsan
@@ -274,12 +274,12 @@ capability changes). SR-02 (warning and hardening flags) was done in Phase 0.
   - Reqs: SPEC 11 E6
   - Verify: release preset; numbers only from produced files (D11)
   - Write it myself: no
-- [ ] **P5.7** clang-format and clang-tidy checks in CI
+- [x] **P5.7** clang-format and clang-tidy checks in CI
   - Files: `.clang-tidy`, `.github/workflows/ci.yml`, fixes in sources
   - Reqs: SR-11, RR-07
   - Verify: zero tidy warnings locally; CI after your push
   - Write it myself: no
-- [ ] **P5.8** Coverage preset and report *(placement)*
+- [x] **P5.8** Coverage preset and report *(placement)*
   - Files: `CMakePresets.json`, `CMakeLists.txt`
   - Reqs: RR-09
   - Verify: lcov report for queue, policy and stats modules; result recorded only as measured
@@ -294,7 +294,7 @@ capability changes). SR-02 (warning and hardening flags) was done in Phase 0.
   - Reqs: RR-01 (100 runs), RR-03 (60 min at 1.5x per policy), RR-02 and RR-04 final confirmation, SR-AUTH-01 (strace shows no sockets)
   - Verify: exit 0 and frame conservation on every run; Valgrind short run; memory growth checked against PR-08; numbers only from runs (D11)
   - Write it myself: no
-- [ ] **P5.10** Release workflow on version tag *(placement)*
+- [x] **P5.10** Release workflow on version tag *(placement)*
   - Files: `.github/workflows/release.yml`
   - Reqs: ARCHITECTURE 9.3 step 7, SR-10
   - Verify: workflow syntax check; real run only when you push a tag

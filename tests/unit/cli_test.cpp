@@ -55,6 +55,13 @@ TEST(CliTest, UnsetOptionsStayUnsetSoValidationAppliesDefaults) {
   EXPECT_FALSE(p.result.run->out.has_value());
 }
 
+TEST(CliTest, PreviewFlagWithAndWithoutValue) {
+  EXPECT_EQ(parse({"run", "--preview"}).result.run->preview, "on");
+  EXPECT_EQ(parse({"run", "--preview=auto"}).result.run->preview, "auto");
+  EXPECT_FALSE(parse({"run"}).result.run->preview.has_value());
+  EXPECT_EQ(parse({"run", "--no-loop"}).result.run->raw.loop, "false");
+}
+
 TEST(CliTest, ValuesAreNotValidatedByTheParser) {
   // Validation (config.cpp) reports every bad value at once; the parser passes them through.
   const Parsed p = parse({"run", "--fps=abc", "--queue=0"});
@@ -85,7 +92,8 @@ TEST(CliTest, RunHelpListsEveryOptionWithDefault) {
   const std::vector<std::pair<const char*, const char*>> flags = {
       {"--source", "[file]"},     {"--input", "[none]"},
       {"--fps", "[30]"},          {"--resolution", "[1280x720]"},
-      {"--cost-mode", "[fixed]"}, {"--cost-ms", "[0]"},
+      {"--cost-mode", "[fixed]"}, {"--processor", "[none]"},
+      {"--kernel", "[15]"},       {"--cost-ms", "[0]"},
       {"--cost-wait", "[busy]"},  {"--queue", "[8]"},
       {"--policy", "[blocking]"}, {"--duration", "[60]"},
       {"--frames", "[none]"},     {"--warmup", "[3]"},
@@ -93,6 +101,9 @@ TEST(CliTest, RunHelpListsEveryOptionWithDefault) {
   for (const auto& [flag, default_text] : flags) {
     EXPECT_TRUE(contains(p.out, flag)) << flag;
     EXPECT_TRUE(contains(p.out, default_text)) << default_text;
+  }
+  for (const char* flag : {"--preview", "--no-loop", "--overwrite", "--allow-root", "--config"}) {
+    EXPECT_TRUE(contains(p.out, flag)) << flag;
   }
   for (const char* group : {"Source", "Processing", "Queue and policy", "Run control", "Output"}) {
     EXPECT_TRUE(contains(p.out, group)) << group;
@@ -151,6 +162,16 @@ TEST(CliTest, RunStartShowsEffectiveConfiguration) {
                                "  run        60 s (warm-up 3 s)  ·  seed 42\n"
                                "  output     results/run_001/\n";
   EXPECT_EQ(format_run_start(config, "results/run_001"), expected);
+}
+
+TEST(CliTest, RunStartShowsAdaptiveParameters) {  // UIUX S2
+  RunConfig config;
+  config.policy = "adaptive";
+  config.target_ms = 100.0;
+  config.exit_ratio = 0.7;
+  config.window = 30;
+  EXPECT_TRUE(contains(format_run_start(config, "out"),
+                       "policy adaptive (target 100 ms, exit 70 ms, window 30)\n"));
 }
 
 TEST(CliTest, RunStartShowsFrameCountWhenRunIsByFrames) {

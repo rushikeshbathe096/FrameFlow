@@ -1,0 +1,15 @@
+# E2 Sustained overload (SPEC 11, main result): 30 FPS; overload 1.2x, 1.5x, 2.0x
+# (cost 40/50/67 ms); queue 8; 60 s; 5 repeats.
+# Expect: blocking latency grows; dropping policies stay bounded and lose about 1 - 1/overload.
+experiment: e2_sustained
+source: { type: synthetic, resolution: 1280x720, fps: 30 }
+processor: { type: none }
+duration_s: 60
+warmup_s: 3
+repeats: 5
+seed: 42
+queue: 8
+matrix:
+  cost_ms: [40, 50, 67]
+  policy: [blocking, drop-oldest, drop-newest, adaptive]
+adaptive: { target_ms: 100, exit_ratio: 0.7, window: 30 }  # SPEC 8.5 defaults

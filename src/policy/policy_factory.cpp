@@ -12,11 +12,16 @@ namespace frameflow {
 
 namespace {
 
-using Creator = std::unique_ptr<OverloadPolicy> (*)();
+using Creator = std::unique_ptr<OverloadPolicy> (*)(Clock&, const AdaptiveParams&);
 
 template <typename Policy>
-std::unique_ptr<OverloadPolicy> make() {
+std::unique_ptr<OverloadPolicy> make(Clock& /*clock*/, const AdaptiveParams& /*adaptive*/) {
   return std::make_unique<Policy>();
+}
+
+template <>
+std::unique_ptr<OverloadPolicy> make<AdaptivePolicy>(Clock& clock, const AdaptiveParams& adaptive) {
+  return std::make_unique<AdaptivePolicy>(clock, adaptive);
 }
 
 // One line per policy (RR-05). A vector keeps the display order stable.
@@ -25,15 +30,17 @@ const std::vector<std::pair<std::string_view, Creator>>& registry() {
       {"blocking", &make<BlockingPolicy>},
       {"drop-oldest", &make<DropOldestPolicy>},
       {"drop-newest", &make<DropNewestPolicy>},
+      {"adaptive", &make<AdaptivePolicy>},
   };
   return entries;
 }
 
 }  // namespace
 
-std::unique_ptr<OverloadPolicy> make_policy(std::string_view name) {
+std::unique_ptr<OverloadPolicy> make_policy(std::string_view name, Clock& clock,
+                                            const AdaptiveParams& adaptive) {
   for (const auto& [registered, create] : registry()) {
-    if (registered == name) return create();
+    if (registered == name) return create(clock, adaptive);
   }
   std::string valid;
   for (std::string_view registered : policy_names()) {

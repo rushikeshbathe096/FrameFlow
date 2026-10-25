@@ -74,8 +74,8 @@ std::string parse_cpu_model(std::string_view cpuinfo) {
   return std::string(*value);
 }
 
-std::optional<std::uint64_t> parse_mem_total_mb(std::string_view meminfo) {
-  const auto value = find_value(meminfo, "MemTotal");
+std::optional<std::uint64_t> parse_kb_field(std::string_view text, std::string_view key) {
+  const auto value = find_value(text, key);
   if (!value) return std::nullopt;
   std::uint64_t kb = 0;
   const auto [ptr, ec] = std::from_chars(value->data(), value->data() + value->size(), kb);
@@ -83,7 +83,18 @@ std::optional<std::uint64_t> parse_mem_total_mb(std::string_view meminfo) {
       trim(std::string_view(ptr, value->data() + value->size() - ptr)) != "kB") {
     return std::nullopt;
   }
-  return kb / 1024;
+  return kb;
+}
+
+std::optional<std::uint64_t> parse_mem_total_mb(std::string_view meminfo) {
+  const std::optional<std::uint64_t> kb = parse_kb_field(meminfo, "MemTotal");
+  if (!kb) return std::nullopt;
+  return *kb / 1024;
+}
+
+MemoryStatus read_memory_status() {
+  const std::string status = read_file("/proc/self/status");
+  return MemoryStatus{parse_kb_field(status, "VmRSS"), parse_kb_field(status, "VmHWM")};
 }
 
 std::string hash_hostname(std::string_view hostname) {
@@ -93,7 +104,7 @@ std::string hash_hostname(std::string_view hostname) {
     hash *= 1099511628211ULL;  // FNV-1a 64-bit prime
   }
   char hex[17];
-  std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(hash));
+  (void)std::snprintf(hex, sizeof(hex), "%016llx", static_cast<unsigned long long>(hash));
   return hex;
 }
 

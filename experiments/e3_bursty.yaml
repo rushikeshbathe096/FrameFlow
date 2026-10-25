@@ -1,0 +1,19 @@
+# E3 Bursty overload (SPEC 11, where adaptive should matter): base 20 ms (0.6x at 30 FPS);
+# spikes to 80 ms (2.4x) for 1 s every 5 s; fixed seed; 60 s; 5 repeats.
+# Hypothesis: adaptive drops only during and right after spikes. Report the result either way.
+experiment: e3_bursty
+source: { type: synthetic, resolution: 1280x720, fps: 30 }
+processor: { type: none }
+duration_s: 60
+warmup_s: 3
+repeats: 5
+seed: 42
+queue: 8
+cost_mode: bursty
+cost_ms: 20
+spike_ms: 80
+spike_len: 1s
+spike_every: 5s
+matrix:
+  policy: [blocking, drop-oldest, adaptive]
+adaptive: { target_ms: 100, exit_ratio: 0.7, window: 30 }

@@ -103,5 +103,31 @@ TEST(MetricsStoreTest, ConcurrentRecordsOfDistinctIdsAreSafe) {
   for (std::uint64_t id = 0; id < frames.size(); ++id) EXPECT_EQ(frames[id].id, id);
 }
 
+// D52: live() counts delivered and dropped frames as they are recorded (in-flight frames are
+// neither), keeps the latest latency and depth.
+TEST(MetricsStoreTest, LiveCounts) {
+  MetricsStore store(8);
+  EXPECT_EQ(store.live().delivered, 0u);
+  EXPECT_FALSE(store.live().last_latency.has_value());
+  FrameMeta delivered;
+  delivered.id = 0;
+  delivered.t_cap = Clock::time_point{} + std::chrono::milliseconds(10);
+  delivered.t_out = Clock::time_point{} + std::chrono::milliseconds(35);
+  store.record_frame(delivered);
+  FrameMeta dropped;
+  dropped.id = 1;
+  dropped.drop_reason = DropReason::Oldest;
+  store.record_frame(dropped);
+  FrameMeta in_flight;
+  in_flight.id = 2;
+  store.record_frame(in_flight);
+  store.record_depth(Clock::time_point{}, 5);
+  const LiveCounts live = store.live();
+  EXPECT_EQ(live.delivered, 1u);
+  EXPECT_EQ(live.dropped, 1u);
+  EXPECT_EQ(live.depth, 5u);
+  EXPECT_EQ(live.last_latency, std::chrono::milliseconds(25));
+}
+
 }  // namespace
 }  // namespace frameflow

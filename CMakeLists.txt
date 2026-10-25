@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(FRAMEFLOW_HARDENING "Enable hardening flags (release)" OFF)
+option(FRAMEFLOW_COVERAGE "Build with gcov instrumentation (coverage preset, RR-09)" OFF)
 set(FRAMEFLOW_SANITIZER "" CACHE STRING "Sanitizer build: '', 'asan' or 'tsan'")
 set_property(CACHE FRAMEFLOW_SANITIZER PROPERTY STRINGS "" asan tsan)
 
@@ -28,6 +29,12 @@ elseif(NOT FRAMEFLOW_SANITIZER STREQUAL "")
   message(FATAL_ERROR "Unknown FRAMEFLOW_SANITIZER '${FRAMEFLOW_SANITIZER}'")
 endif()
 
+if(FRAMEFLOW_COVERAGE)
+  # Global like the sanitizers: every object (library and tests) must be instrumented.
+  add_compile_options(--coverage -O0)
+  add_link_options(--coverage)
+endif()
+
 if(FRAMEFLOW_HARDENING)
   # -U first: Ubuntu's gcc predefines _FORTIFY_SOURCE, and redefining it warns (-Werror).
   add_compile_options(-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -fstack-protector-strong)
@@ -35,11 +42,12 @@ if(FRAMEFLOW_HARDENING)
   add_link_options(-pie)
 endif()
 
-find_package(OpenCV REQUIRED COMPONENTS core imgproc)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio highgui)
 find_package(GTest REQUIRED)
 find_package(Threads REQUIRED)
 find_package(nlohmann_json 3.11 REQUIRED)
 find_package(CLI11 2.4 REQUIRED)
+find_package(yaml-cpp 0.8 REQUIRED)
 
 # Git commit for `--version` and summary.json (FR-CLI-04, BR-10). Taken at configure time, so it
 # is stale until CMake re-runs after a new commit (D23). Running git here is CMake, not C++ (SR-09).
@@ -60,14 +68,19 @@ configure_file(include/frameflow/version.hpp.in
                ${PROJECT_BINARY_DIR}/generated/frameflow/version.hpp @ONLY)
 
 add_library(frameflow_core STATIC
+  src/bench/bench_runner.cpp
+  src/bench/experiment.cpp
   src/cli.cpp
   src/clock.cpp
   src/config.cpp
+  src/config_file.cpp
   src/pipeline.cpp
+  src/platform/display.cpp
   src/platform/environment.cpp
   src/platform/output_dir.cpp
   src/platform/privileges.cpp
   src/platform/signals.cpp
+  src/policy/adaptive_policy.cpp
   src/policy/policy_factory.cpp
   src/metrics/csv_reporter.cpp
   src/metrics/json_reporter.cpp
@@ -76,19 +89,28 @@ add_library(frameflow_core STATIC
   src/metrics/stats.cpp
   src/metrics/warnings.cpp
   src/processor/cost_model.cpp
+  src/processor/image_processors.cpp
+  src/processor/processor_factory.cpp
   src/run_command.cpp
+  src/sink/preview_sink.cpp
   src/source/source_runner.cpp
   src/source/synthetic_source.cpp
+  src/source/video_file_source.cpp
   src/ui/console_reporter.cpp
+  src/ui/progress.cpp
   src/version.cpp
   src/worker.cpp)
 target_include_directories(frameflow_core
   PUBLIC ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/generated)
 target_link_libraries(frameflow_core
-  PUBLIC Threads::Threads opencv_core nlohmann_json::nlohmann_json
+  PUBLIC Threads::Threads opencv_core opencv_imgproc opencv_videoio opencv_highgui nlohmann_json::nlohmann_json yaml-cpp::yaml-cpp
   PRIVATE frameflow_warnings CLI11::CLI11)
 
 add_executable(frameflow src/main.cpp)
+
+# PR-03 micro-benchmark tool (P3.8). Meaningful only in the release preset; measured in P5.9.
+add_executable(frameflow_bench_queue bench/bench_queue.cpp)
+target_link_libraries(frameflow_bench_queue PRIVATE frameflow_core frameflow_warnings)
 target_link_libraries(frameflow PRIVATE frameflow_core frameflow_warnings)
 
 enable_testing()

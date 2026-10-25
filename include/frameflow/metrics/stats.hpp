@@ -42,6 +42,10 @@ struct RunStats {
   std::optional<double> drop_oldest_pct, drop_newest_pct, drop_stale_pct;
   std::optional<double> depth_mean;
   std::optional<std::size_t> depth_max;
+  // Adaptive policy only (set by make_run_report, D45): state changes in the whole run, and the
+  // share of the measurement window spent in SHEDDING.
+  std::optional<std::uint64_t> state_changes;
+  std::optional<double> shedding_pct;
 };
 
 RunStats compute_run_stats(const std::vector<FrameMeta>& frames,

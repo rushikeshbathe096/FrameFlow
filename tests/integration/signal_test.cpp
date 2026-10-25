@@ -1,117 +1,47 @@
 // Spawns the real `frameflow` binary (posix_spawn, never system()) and sends it signals
 // (FR-CLI-06, EC-08..EC-11, PR-06).
-#include <fcntl.h>
 #include <gtest/gtest.h>
-#include <signal.h>
-#include <spawn.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iterator>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
-extern char** environ;
+#include "child_process.hpp"
 
 namespace {
 
 namespace fs = std::filesystem;
+using frameflow::testing::ChildProcess;
 using std::chrono::milliseconds;
 using std::chrono::steady_clock;
-
-std::string read_text(const fs::path& path) {
-  std::ifstream in(path, std::ios::binary);
-  return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-}
-
-// The parent's environment, with TSan's 1 s exit pause turned off for the child: a forced exit
-// (_exit while pipeline threads still run) would otherwise sleep there and fail the latency
-// check. Harmless for builds without TSan.
-std::vector<std::string> child_environment() {
-  std::vector<std::string> env;
-  bool has_tsan_options = false;
-  for (char** var = environ; *var != nullptr; ++var) {
-    env.emplace_back(*var);
-    if (env.back().rfind("TSAN_OPTIONS=", 0) == 0) {
-      env.back() += ":atexit_sleep_ms=0";
-      has_tsan_options = true;
-    }
-  }
-  if (!has_tsan_options) env.emplace_back("TSAN_OPTIONS=atexit_sleep_ms=0");
-  return env;
-}
-
-std::vector<char*> as_argv(std::vector<std::string>& strings) {
-  std::vector<char*> pointers;
-  for (std::string& text : strings) pointers.push_back(text.data());
-  pointers.push_back(nullptr);
-  return pointers;
-}
 
 class SignalTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    root_ = fs::temp_directory_path() / ("frameflow_signal_test_" + std::to_string(::getpid()));
     fs::remove_all(root_);
     fs::create_directories(root_);
   }
-  void TearDown() override {
-    if (pid_ > 0) {
-      ::kill(pid_, SIGKILL);
-      ::waitpid(pid_, nullptr, 0);
-    }
-    fs::remove_all(root_);
-  }
+  void TearDown() override { fs::remove_all(root_); }
 
   // Starts `frameflow run <args> --out=<root>/run` with stdout/stderr going to files.
   void spawn(std::vector<std::string> args) {
     args.insert(args.begin(), {FRAMEFLOW_BINARY, "run", "--source=synthetic", "--resolution=64x48",
                                "--out=" + out_dir().string()});
-    std::vector<char*> argv = as_argv(args);
-    std::vector<std::string> env_strings = child_environment();
-    std::vector<char*> env = as_argv(env_strings);
-    posix_spawn_file_actions_t actions;
-    posix_spawn_file_actions_init(&actions);
-    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, (root_ / "stdout").c_str(),
-                                     O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, (root_ / "stderr").c_str(),
-                                     O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    ASSERT_EQ(posix_spawn(&pid_, FRAMEFLOW_BINARY, &actions, nullptr, argv.data(), env.data()), 0);
-    posix_spawn_file_actions_destroy(&actions);
+    ASSERT_TRUE(child_.start(args));
   }
 
   bool wait_for_text(const char* file, const std::string& text, milliseconds timeout) {
-    const auto deadline = steady_clock::now() + timeout;
-    while (steady_clock::now() < deadline) {
-      if (read_text(root_ / file).find(text) != std::string::npos) return true;
-      std::this_thread::sleep_for(milliseconds(5));
-    }
-    return false;
+    return child_.wait_for_text(file, text, timeout);
   }
-
-  // Raw wait status, or nullopt if the child is still running after timeout.
-  std::optional<int> wait_exit(milliseconds timeout) {
-    const auto deadline = steady_clock::now() + timeout;
-    while (steady_clock::now() < deadline) {
-      int status = 0;
-      if (::waitpid(pid_, &status, WNOHANG) == pid_) {
-        pid_ = -1;
-        return status;
-      }
-      std::this_thread::sleep_for(milliseconds(2));
-    }
-    return std::nullopt;
-  }
+  std::optional<int> wait_exit(milliseconds timeout) { return child_.wait_exit(timeout); }
 
   void wait_until_running() {
-    ASSERT_TRUE(wait_for_text("stdout", "run started", milliseconds(10000)))
-        << read_text(root_ / "stderr");
+    ASSERT_TRUE(wait_for_text("stdout", "run started", milliseconds(10000))) << err_text();
   }
 
   nlohmann::json summary() const {
@@ -120,10 +50,12 @@ class SignalTest : public ::testing::Test {
   }
 
   fs::path out_dir() const { return root_ / "run"; }
-  std::string err_text() const { return read_text(root_ / "stderr"); }
+  std::string err_text() const { return child_.err_text(); }
 
-  fs::path root_;
-  pid_t pid_ = -1;
+  // Declared before child_: the child (killed in its destructor) is destroyed first.
+  fs::path root_ =
+      fs::temp_directory_path() / ("frameflow_signal_test_" + std::to_string(::getpid()));
+  ChildProcess child_{root_};
 };
 
 void expect_clean_exit_0(const std::optional<int>& status, const std::string& err) {
@@ -139,7 +71,7 @@ TEST_F(SignalTest, SigintWhileSourceBlockedStopsGracefully) {
   wait_until_running();
   std::this_thread::sleep_for(milliseconds(500));
   const auto sent = steady_clock::now();
-  ASSERT_EQ(::kill(pid_, SIGINT), 0);
+  ASSERT_TRUE(child_.signal(SIGINT));
   const std::optional<int> status = wait_exit(milliseconds(5000));
   const auto latency = steady_clock::now() - sent;
   expect_clean_exit_0(status, err_text());
@@ -160,7 +92,7 @@ TEST_F(SignalTest, SigtermWhileWorkerWaitsOnEmptyQueueStopsGracefully) {
   wait_until_running();
   std::this_thread::sleep_for(milliseconds(700));
   const auto sent = steady_clock::now();
-  ASSERT_EQ(::kill(pid_, SIGTERM), 0);
+  ASSERT_TRUE(child_.signal(SIGTERM));
   const std::optional<int> status = wait_exit(milliseconds(5000));
   const auto latency = steady_clock::now() - sent;
   expect_clean_exit_0(status, err_text());
@@ -173,7 +105,7 @@ TEST_F(SignalTest, SigintDuringWarmupWritesInvalidResults) {
   spawn({"--fps=30", "--duration=60", "--warmup=30"});
   wait_until_running();
   std::this_thread::sleep_for(milliseconds(300));
-  ASSERT_EQ(::kill(pid_, SIGINT), 0);
+  ASSERT_TRUE(child_.signal(SIGINT));
   expect_clean_exit_0(wait_exit(milliseconds(5000)), err_text());
   EXPECT_EQ(summary()["valid"], false);
   EXPECT_EQ(summary()["ended_by"], "stop_requested");
@@ -185,10 +117,10 @@ TEST_F(SignalTest, SecondSigintExitsImmediatelyWith130) {
   spawn({"--fps=30", "--cost-ms=3000", "--cost-wait=sleep", "--duration=60", "--warmup=0"});
   wait_until_running();
   std::this_thread::sleep_for(milliseconds(200));
-  ASSERT_EQ(::kill(pid_, SIGINT), 0);
+  ASSERT_TRUE(child_.signal(SIGINT));
   ASSERT_TRUE(wait_for_text("stderr", "stopping", milliseconds(5000))) << err_text();
   const auto sent = steady_clock::now();
-  ASSERT_EQ(::kill(pid_, SIGINT), 0);
+  ASSERT_TRUE(child_.signal(SIGINT));
   const std::optional<int> status = wait_exit(milliseconds(5000));
   const auto latency = steady_clock::now() - sent;
   ASSERT_TRUE(status.has_value());
@@ -203,8 +135,8 @@ TEST_F(SignalTest, SigintThenSigtermAlsoForcesExit) {
   // Different signals never merge, so this checks "second signal" without timing luck.
   spawn({"--fps=30", "--cost-ms=3000", "--cost-wait=sleep", "--duration=60", "--warmup=0"});
   wait_until_running();
-  ASSERT_EQ(::kill(pid_, SIGINT), 0);
-  ASSERT_EQ(::kill(pid_, SIGTERM), 0);
+  ASSERT_TRUE(child_.signal(SIGINT));
+  ASSERT_TRUE(child_.signal(SIGTERM));
   const std::optional<int> status = wait_exit(milliseconds(5000));
   ASSERT_TRUE(status.has_value());
   ASSERT_TRUE(WIFEXITED(*status));

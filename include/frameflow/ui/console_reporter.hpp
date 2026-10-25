@@ -18,6 +18,10 @@ namespace frameflow {
 
 std::string format_run_summary(const RunConfig& config, const RunReport& report);
 
+// "overload 1.50x" from the synthetic cost (cost x fps); with a real processor, whose time is not
+// known in advance, "overload 0.60x (cost only)" (S2 and S4, D53).
+std::string overload_text(const RunConfig& config);
+
 // One `frameflow: warning: <message>` line per warning (ER-07, ER-01 style prefix).
 std::string format_warnings(const std::vector<std::string>& warnings);
 

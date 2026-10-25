@@ -1,0 +1,13 @@
+# E4 Queue capacity sweep (SPEC 11): capacities 2-32 at 1.5x (30 FPS, cost 50 ms),
+# blocking and drop-oldest. Graph p95 and drop rate vs capacity.
+experiment: e4_capacity
+source: { type: synthetic, resolution: 1280x720, fps: 30 }
+processor: { type: none }
+duration_s: 60
+warmup_s: 3
+repeats: 5
+seed: 42
+cost_ms: 50
+matrix:
+  queue: [2, 4, 8, 16, 32]
+  policy: [blocking, drop-oldest]

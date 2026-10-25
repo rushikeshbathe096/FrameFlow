@@ -1,0 +1,14 @@
+# E1 Baseline (SPEC 11): no overload. 30 FPS, cost 15 ms (0.5x), queue 8, 60 s, all four policies.
+# Expect zero drops; confirms the harness.
+experiment: e1_baseline
+source: { type: synthetic, resolution: 1280x720, fps: 30 }
+processor: { type: none }
+duration_s: 60
+warmup_s: 3
+repeats: 5
+seed: 42
+cost_ms: 15
+queue: 8
+matrix:
+  policy: [blocking, drop-oldest, drop-newest, adaptive]
+adaptive: { target_ms: 100, exit_ratio: 0.7, window: 30 }  # SPEC 8.5 defaults

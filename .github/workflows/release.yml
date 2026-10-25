@@ -1,0 +1,55 @@
+name: Release
+
+# ARCHITECTURE 9.3 step 7 (P5.10): on a version tag, build the release binary, run the tests and
+# attach the binary plus checksums to a GitHub release. The binary needs the same Ubuntu 24.04
+# runtime libraries as a source build (SR-10: apt package versions).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # create the release and upload its assets
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install apt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git pkg-config \
+            libopencv-dev libgtest-dev nlohmann-json3-dev libcli11-dev libyaml-cpp-dev \
+            python3-pytest python3-pandas python3-matplotlib
+
+      - name: Tag must match the project version
+        run: |
+          version="$(sed -n 's/^project(frameflow VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match project version ${version}" >&2
+            exit 1
+          fi
+
+      - name: Build and test (release preset)
+        run: |
+          cmake --preset release
+          cmake --build --preset release --parallel
+          ctest --preset release
+
+      - name: Package
+        run: |
+          name="frameflow-${GITHUB_REF_NAME}-linux-x86_64-ubuntu24.04"
+          mkdir -p "dist/${name}"
+          cp build/release/frameflow build/release/frameflow_bench_queue README.md "dist/${name}/"
+          cp -r experiments scripts "dist/${name}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" > SHA256SUMS)
+          ./build/release/frameflow --version
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS \
+            --title "FrameFlow ${GITHUB_REF_NAME}" --generate-notes --verify-tag

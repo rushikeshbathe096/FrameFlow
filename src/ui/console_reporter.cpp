@@ -77,19 +77,28 @@ void put_depth(std::ostream& out, const RunConfig& config, const RunStats& s) {
 std::string format_run_summary(const RunConfig& config, const RunReport& report) {
   const RunStats& s = report.stats;
   std::ostringstream out;
-  out << "Result  ·  policy " << config.policy << "  ·  overload "
-      << fixed(config.cost_ms * config.fps / 1000.0, 2) << "x  ·  "
+  out << "Result  ·  policy " << config.policy << "  ·  " << overload_text(config) << "  ·  "
       << (report.valid ? "valid" : "invalid") << "\n\n";
   put_latency(out, s);
   out << "  Throughput       in " << fixed1(s.input_fps) << " fps   out " << fixed1(s.output_fps)
       << " fps\n";
   put_frames(out, report);
   put_depth(out, config, s);
+  if (s.state_changes) {  // UIUX S4 / 9.4: the Adaptive row only for the adaptive policy
+    out << "  Adaptive         " << *s.state_changes
+        << (*s.state_changes == 1 ? " state change" : " state changes") << "   time shedding "
+        << fixed1(s.shedding_pct) << "%\n";
+  }
   if (config.warmup_s > 0) {
     out << "  (frame counts: whole run; latency, fps, drop % and depth: after the "
         << number_text(config.warmup_s) << " s warm-up)\n";
   }
   return out.str();
+}
+
+std::string overload_text(const RunConfig& config) {
+  const std::string text = "overload " + fixed(config.cost_ms * config.fps / 1000.0, 2) + "x";
+  return config.processor == "none" ? text : text + " (cost only)";
 }
 
 std::string format_warnings(const std::vector<std::string>& warnings) {

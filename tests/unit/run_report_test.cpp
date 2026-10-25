@@ -83,6 +83,48 @@ TEST(RunReportTest, DropEventsInTimeOrder) {
   EXPECT_EQ(report.events[1].detail, "oldest");
 }
 
+// FR-POL-09 / DR-03: adaptive state changes become events, in time order with the drops.
+TEST(RunReportTest, StateChangesBecomeEvents) {
+  MetricsStore metrics(2);
+  FrameMeta dropped = captured(0, milliseconds(0));
+  dropped.drop_reason = DropReason::Stale;
+  dropped.t_drop = kT0 + milliseconds(1500);
+  metrics.record_frame(dropped);
+  RunResult result = result_ending_at(seconds(10));
+  result.state_changes = std::vector<StateChange>{
+      {kT0 + seconds(1), AdaptiveState::Normal, AdaptiveState::Shedding, milliseconds(123)},
+      {kT0 + seconds(2), AdaptiveState::Shedding, AdaptiveState::Normal, milliseconds(65)}};
+  const RunReport report = make_run_report(metrics, result, seconds(0));
+  ASSERT_EQ(report.events.size(), 3u);
+  EXPECT_EQ(report.events[0].type, "state_change");
+  EXPECT_FALSE(report.events[0].frame_id.has_value());
+  EXPECT_EQ(report.events[0].detail, "NORMAL->SHEDDING L_ms=123.000");
+  EXPECT_EQ(report.events[1].type, "drop");
+  EXPECT_EQ(report.events[2].detail, "SHEDDING->NORMAL L_ms=65.000");
+  EXPECT_EQ(report.stats.state_changes, 2u);
+}
+
+// D45: share of the measurement window spent in SHEDDING; warm-up time does not count.
+TEST(RunReportTest, SheddingShareOfTheWindow) {
+  MetricsStore metrics(1);
+  RunResult result = result_ending_at(seconds(10));
+  result.state_changes = std::vector<StateChange>{
+      {kT0 + seconds(1), AdaptiveState::Normal, AdaptiveState::Shedding, milliseconds(200)},
+      {kT0 + seconds(4), AdaptiveState::Shedding, AdaptiveState::Normal, milliseconds(50)},
+      {kT0 + seconds(8), AdaptiveState::Normal, AdaptiveState::Shedding, milliseconds(200)}};
+  // Window [2 s, 10 s): shedding 2-4 s and 8-10 s = 4 s of 8 s.
+  const RunReport report = make_run_report(metrics, result, seconds(2));
+  ASSERT_TRUE(report.stats.shedding_pct.has_value());
+  EXPECT_DOUBLE_EQ(*report.stats.shedding_pct, 50.0);
+}
+
+TEST(RunReportTest, FixedPolicyHasNoAdaptiveStats) {
+  MetricsStore metrics(1);
+  const RunReport report = make_run_report(metrics, result_ending_at(seconds(5)), seconds(1));
+  EXPECT_FALSE(report.stats.state_changes.has_value());
+  EXPECT_FALSE(report.stats.shedding_pct.has_value());
+}
+
 TEST(RunReportTest, CopiesDepthAndComputesStats) {
   MetricsStore metrics(1);
   FrameMeta meta = captured(0, milliseconds(0));

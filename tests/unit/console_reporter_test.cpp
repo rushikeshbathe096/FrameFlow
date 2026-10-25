@@ -92,6 +92,27 @@ TEST(ConsoleReporterTest, WarmupNoteExplainsWhatIsExcluded) {
       << text;
 }
 
+// UIUX S4: the Adaptive row appears for the adaptive policy only (9.4: omitted for fixed ones).
+TEST(ConsoleReporterTest, AdaptiveRowOnlyForAdaptive) {
+  RunReport report = overloaded_report();
+  EXPECT_EQ(format_run_summary(drop_oldest_config(), report).find("Adaptive"), std::string::npos);
+  report.stats.state_changes = 3;
+  report.stats.shedding_pct = 12.46;
+  RunConfig config = drop_oldest_config();
+  config.policy = "adaptive";
+  EXPECT_NE(format_run_summary(config, report)
+                .find("  Adaptive         3 state changes   time shedding 12.5%\n"),
+            std::string::npos);
+}
+
+TEST(ConsoleReporterTest, OverloadWithRealProcessorSaysCostOnly) {  // D53
+  RunConfig config;
+  config.cost_ms = 20.0;
+  EXPECT_EQ(overload_text(config), "overload 0.60x");
+  config.processor = "canny";
+  EXPECT_EQ(overload_text(config), "overload 0.60x (cost only)");
+}
+
 TEST(ConsoleReporterTest, WarningsHavePrefixOnePerLine) {
   EXPECT_EQ(format_warnings({"a", "b c"}), "frameflow: warning: a\nframeflow: warning: b c\n");
   EXPECT_EQ(format_warnings({}), "");

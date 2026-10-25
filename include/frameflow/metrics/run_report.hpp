@@ -20,11 +20,20 @@
 
 namespace frameflow {
 
-struct Event {
+struct RunEvent {
   Clock::time_point t;
-  std::string type;  // "drop"
+  std::string type;  // "drop" or "state_change" (adaptive, FR-POL-09)
   std::optional<std::uint64_t> frame_id;
-  std::string detail;  // drop reason
+  std::string detail;  // drop reason, or "NORMAL->SHEDDING L_ms=123.456"
+};
+
+// Resident memory of the process (PR-07, PR-08, D56), sampled once per second by the main
+// thread; empty when the run was too short to sample or /proc was unreadable.
+struct MemoryUsage {
+  std::optional<double> peak_rss_mb;          // VmHWM at the end
+  std::optional<double> rss_after_warmup_mb;  // first sample at or after the end of warm-up
+  std::optional<double> rss_end_mb;           // after the run, before results are written
+  std::optional<double> growth_pct;           // end vs after warm-up (PR-08)
 };
 
 struct RunReport {
@@ -35,8 +44,9 @@ struct RunReport {
   bool valid = false;
   std::vector<FrameMeta> frames;  // id order, `warmup` set
   std::vector<DepthSample> depth;
-  std::vector<Event> events;  // time order
+  std::vector<RunEvent> events;  // time order
   RunStats stats;
+  MemoryUsage memory;  // filled by the run command after the run (not by make_run_report)
 };
 
 RunReport make_run_report(const MetricsStore& metrics, const RunResult& result,

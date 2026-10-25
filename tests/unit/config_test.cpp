@@ -110,15 +110,190 @@ TEST(ConfigTest, CostMs) {
 TEST(ConfigTest, CostModeAndWait) {
   expect_accepted(&RawConfig::cost_mode, "fixed");
   expect_rejected(&RawConfig::cost_mode, "FIXED", "--cost-mode");
+  expect_rejected(&RawConfig::cost_mode, "spiky", "--cost-mode");
   expect_accepted(&RawConfig::cost_wait, "busy");
   expect_accepted(&RawConfig::cost_wait, "sleep");
   expect_rejected(&RawConfig::cost_wait, "spin", "--cost-wait");
   EXPECT_EQ(with(&RawConfig::cost_wait, "sleep").config.cost_wait, CostWait::Sleep);
 }
 
+RawConfig bursty(const std::string& spike_ms, const std::string& len, const std::string& every) {
+  RawConfig raw = synthetic();
+  raw.cost_mode = "bursty";
+  raw.cost_ms = "20";
+  raw.spike_ms = spike_ms;
+  raw.spike_len = len;
+  raw.spike_every = every;
+  return raw;
+}
+
+// VR-06: bursty needs all three spike flags; spike-ms >= cost-ms; spike-len < spike-every.
+TEST(ConfigTest, BurstyAcceptsCompleteSchedule) {
+  const ValidationResult result = validate(bursty("80", "1s", "5s"));
+  ASSERT_TRUE(result.ok()) << format_validation_errors(result.errors);
+  EXPECT_EQ(result.config.cost_mode, "bursty");
+  EXPECT_EQ(result.config.spike_ms, 80.0);
+  EXPECT_EQ(result.config.spike_len_s, 1.0);
+  EXPECT_EQ(result.config.spike_every_s, 5.0);
+  EXPECT_TRUE(validate(bursty("20", "500ms", "2")).ok());  // ms suffix, bare seconds, equal cost
+}
+
+TEST(ConfigTest, BurstyRequiresAllThreeSpikeFlags) {
+  RawConfig raw = bursty("80", "1s", "5s");
+  raw.spike_every.reset();
+  const ValidationResult result = validate(raw);
+  ASSERT_EQ(result.errors.size(), 1u);
+  EXPECT_EQ(result.errors[0].option, "--cost-mode");
+}
+
+TEST(ConfigTest, SpikeCostBelowBaseCostIsRejected) {
+  const ValidationResult result = validate(bursty("10", "1s", "5s"));
+  ASSERT_EQ(result.errors.size(), 1u);
+  EXPECT_EQ(result.errors[0].option, "--spike-ms");
+}
+
+TEST(ConfigTest, SpikeLengthMustBeShorterThanPeriod) {
+  const ValidationResult result = validate(bursty("80", "5s", "5s"));
+  ASSERT_EQ(result.errors.size(), 1u);
+  EXPECT_EQ(result.errors[0].option, "--spike-len");
+}
+
+TEST(ConfigTest, SpikeDurationsMustParse) {
+  for (const char* bad : {"1sec", "0s", "-1s", "abc", "4000s"}) {
+    const ValidationResult result = validate(bursty("80", bad, "5s"));
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.errors[0].option, "--spike-len") << bad;
+  }
+}
+
+TEST(ConfigTest, SpikeFlagsWithoutBurstyAreRejected) {
+  RawConfig raw = synthetic();
+  raw.spike_ms = "80";
+  const ValidationResult result = validate(raw);
+  ASSERT_EQ(result.errors.size(), 1u);
+  EXPECT_EQ(result.errors[0].option, "--spike-ms/--spike-len/--spike-every");
+}
+
+TEST(ConfigTest, BurstyConvertsToPipelineBurstWithSeed) {
+  RawConfig raw = bursty("80", "1s", "5s");
+  raw.seed = "7";
+  const PipelineConfig p = validate(raw).config.to_pipeline_config();
+  ASSERT_TRUE(p.burst.has_value());
+  EXPECT_EQ(p.burst->spike_cost, std::chrono::milliseconds(80));
+  EXPECT_EQ(p.burst->length, std::chrono::seconds(1));
+  EXPECT_EQ(p.burst->every, std::chrono::seconds(5));
+  EXPECT_EQ(p.burst->seed, 7u);
+  EXPECT_FALSE(validate(synthetic()).config.to_pipeline_config().burst.has_value());
+}
+
+TEST(ConfigTest, ParseSeconds) {
+  EXPECT_EQ(parse_seconds("1s"), 1.0);
+  EXPECT_EQ(parse_seconds("250ms"), 0.25);
+  EXPECT_EQ(parse_seconds("2.5"), 2.5);
+  EXPECT_EQ(parse_seconds("s"), std::nullopt);
+  EXPECT_EQ(parse_seconds("ms"), std::nullopt);
+  EXPECT_EQ(parse_seconds("1 s"), std::nullopt);
+}
+
+RawConfig adaptive() {
+  RawConfig raw = synthetic();
+  raw.policy = "adaptive";
+  return raw;
+}
+
+TEST(ConfigTest, AdaptiveDefaults) {
+  const ValidationResult r = validate(adaptive());
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.config.target_ms, 100.0);
+  EXPECT_EQ(r.config.exit_ratio, 0.7);
+  EXPECT_EQ(r.config.window, 30u);
+  const PipelineConfig p = r.config.to_pipeline_config();
+  EXPECT_EQ(p.adaptive.target, std::chrono::milliseconds(100));
+  EXPECT_EQ(p.adaptive.exit_ratio, 0.7);
+  EXPECT_EQ(p.adaptive.window, 30u);
+  EXPECT_FALSE(validate(synthetic()).config.target_ms.has_value());  // only with adaptive
+}
+
+void expect_adaptive(std::optional<std::string> RawConfig::*field, const std::string& value,
+                     bool ok, const std::string& option) {
+  RawConfig raw = adaptive();
+  raw.*field = value;
+  const ValidationResult r = validate(raw);
+  if (ok) {
+    EXPECT_TRUE(r.ok()) << value << ": " << format_validation_errors(r.errors);
+  } else {
+    ASSERT_EQ(r.errors.size(), 1u) << value;
+    EXPECT_EQ(r.errors[0].option, option) << value;
+  }
+}
+
+// VR-08 --target-ms: 1 to 60000.
+TEST(ConfigTest, TargetMs) {
+  for (const char* ok : {"1", "100", "60000", "33.5"}) {
+    expect_adaptive(&RawConfig::target_ms, ok, true, "");
+  }
+  for (const char* bad : {"0", "60001", "-5", "abc"}) {
+    expect_adaptive(&RawConfig::target_ms, bad, false, "--target-ms");
+  }
+}
+
+// VR-09 --exit-ratio: greater than 0 and less than 1.
+TEST(ConfigTest, ExitRatio) {
+  for (const char* ok : {"0.7", "0.01", "0.99"}) {
+    expect_adaptive(&RawConfig::exit_ratio, ok, true, "");
+  }
+  for (const char* bad : {"0", "1", "1.2", "-0.5", "x"}) {
+    expect_adaptive(&RawConfig::exit_ratio, bad, false, "--exit-ratio");
+  }
+}
+
+// VR-10 --window: integer 5 to 1000.
+TEST(ConfigTest, Window) {
+  for (const char* ok : {"5", "30", "1000"}) expect_adaptive(&RawConfig::window, ok, true, "");
+  for (const char* bad : {"4", "1001", "10.5", ""}) {
+    expect_adaptive(&RawConfig::window, bad, false, "--window");
+  }
+}
+
+// VR-08: "only with adaptive".
+TEST(ConfigTest, AdaptiveOptionsRequireAdaptivePolicy) {
+  RawConfig raw = synthetic();
+  raw.policy = "blocking";
+  raw.target_ms = "100";
+  const ValidationResult r = validate(raw);
+  ASSERT_EQ(r.errors.size(), 1u);
+  EXPECT_EQ(r.errors[0].option, "--target-ms/--exit-ratio/--window");
+  raw.policy = "leaky";  // an invalid policy is reported alone, without the "only with" error
+  const ValidationResult invalid = validate(raw);
+  ASSERT_EQ(invalid.errors.size(), 1u);
+  EXPECT_EQ(invalid.errors[0].option, "--policy");
+}
+
+// VR-11 --processor: none, grayscale, blur, canny.
+TEST(ConfigTest, Processor) {
+  for (const char* ok : {"none", "grayscale", "blur", "canny"}) {
+    expect_accepted(&RawConfig::processor, ok);
+  }
+  for (const char* bad : {"Blur", "sharpen", ""}) {
+    expect_rejected(&RawConfig::processor, bad, "--processor");
+  }
+  EXPECT_EQ(with(&RawConfig::processor, "canny").config.processor, "canny");
+  EXPECT_EQ(validate(synthetic()).config.processor, "none");
+}
+
+// VR-12 --kernel: odd integer 3 to 99.
+TEST(ConfigTest, Kernel) {
+  for (const char* ok : {"3", "15", "99"}) expect_accepted(&RawConfig::kernel, ok);
+  for (const char* bad : {"2", "16", "1", "101", "7.0", "x"}) {
+    expect_rejected(&RawConfig::kernel, bad, "--kernel");
+  }
+  const PipelineConfig p = with(&RawConfig::kernel, "21").config.to_pipeline_config();
+  EXPECT_EQ(p.kernel, 21);
+}
+
 // VR-07 --policy: one of the registered names, case-sensitive.
 TEST(ConfigTest, Policy) {
-  for (const char* ok : {"blocking", "drop-oldest", "drop-newest"}) {
+  for (const char* ok : {"blocking", "drop-oldest", "drop-newest", "adaptive"}) {
     expect_accepted(&RawConfig::policy, ok);
   }
   for (const char* bad : {"Blocking", "leaky", ""}) {
@@ -137,7 +312,7 @@ TEST(ConfigTest, Resolution) {
   EXPECT_EQ(with(&RawConfig::resolution, "640x480").config.resolution, cv::Size(640, 480));
 }
 
-// VR-15 --source: file or synthetic; file needs --input (and is not available until Phase 5).
+// VR-15 --source: file or synthetic; file needs --input. The file is checked when opened (D48).
 TEST(ConfigTest, Source) {
   expect_accepted(&RawConfig::source, "synthetic");
   expect_rejected(&RawConfig::source, "camera", "--source");
@@ -149,9 +324,16 @@ TEST(ConfigTest, Source) {
 
   RawConfig file_with_input;
   file_with_input.input = "clip.mp4";
-  const ValidationResult unavailable = validate(file_with_input);
-  ASSERT_EQ(unavailable.errors.size(), 1u);
-  EXPECT_EQ(unavailable.errors[0].problem, "is not available yet");  // D20
+  const ValidationResult with_input = validate(file_with_input);
+  EXPECT_TRUE(with_input.ok());
+  EXPECT_EQ(with_input.config.input, "clip.mp4");
+  EXPECT_TRUE(with_input.config.loop);  // FR-SRC-06 default
+}
+
+TEST(ConfigTest, Loop) {
+  EXPECT_FALSE(with(&RawConfig::loop, "false").config.loop);
+  EXPECT_TRUE(with(&RawConfig::loop, "true").config.loop);
+  expect_rejected(&RawConfig::loop, "no", "--loop");
 }
 
 // VR-16 --seed: unsigned 64-bit integer.

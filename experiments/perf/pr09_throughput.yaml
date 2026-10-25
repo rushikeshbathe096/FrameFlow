@@ -1,0 +1,15 @@
+# PR-09 throughput ceiling (720p, no processing: 240 FPS without drops) and EC-16 (240 FPS with
+# small frames: runs, lateness reported honestly). Drop-newest so that any shortfall shows up as
+# drops instead of a growing queue; 60 s; 5 repeats (PR-11).
+experiment: pr09_throughput
+source: { type: synthetic, fps: 240 }
+processor: { type: none }
+duration_s: 60
+warmup_s: 3
+repeats: 5
+seed: 42
+cost_ms: 0
+queue: 8
+policy: drop-newest
+matrix:
+  source.resolution: [1280x720, 64x48]

@@ -4,6 +4,7 @@
 // far below blocking.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -116,6 +117,39 @@ INSTANTIATE_TEST_SUITE_P(OverloadTest, DroppingPolicyTest,
                          ::testing::Values("drop-oldest", "drop-newest"), [](const auto& info) {
                            return info.param == "drop-oldest" ? "DropOldest" : "DropNewest";
                          });
+
+// P4.5: adaptive at 2.0x sheds (stale/oldest drops, at least one state change, logged as events)
+// and keeps latency far below blocking; BR-01..BR-04 hold (checked in run_overloaded).
+TEST(OverloadTest, AdaptiveShedsUnderOverloadAndKeepsLatencyBounded) {
+  const OverloadRun adaptive = run_overloaded("adaptive", milliseconds(40));
+  const OverloadRun blocking = run_overloaded("blocking", milliseconds(40));
+  EXPECT_GT(adaptive.counts.dropped, 0u);
+  for (const FrameMeta& meta : adaptive.report.frames) {
+    if (!meta.is_dropped()) continue;
+    EXPECT_TRUE(meta.drop_reason == DropReason::Stale || meta.drop_reason == DropReason::Oldest)
+        << "frame " << meta.id;
+    EXPECT_TRUE(meta.t_drop.has_value()) << "frame " << meta.id;
+  }
+  ASSERT_TRUE(adaptive.report.stats.state_changes.has_value());
+  EXPECT_GE(*adaptive.report.stats.state_changes, 1u);
+  ASSERT_TRUE(adaptive.report.stats.shedding_pct.has_value());
+  EXPECT_GT(*adaptive.report.stats.shedding_pct, 0.0);
+  const bool logged = std::any_of(adaptive.report.events.begin(), adaptive.report.events.end(),
+                                  [](const RunEvent& e) { return e.type == "state_change"; });
+  EXPECT_TRUE(logged);  // FR-POL-09 in events.csv
+  ASSERT_TRUE(adaptive.report.stats.max_ms && blocking.report.stats.max_ms);
+  EXPECT_LT(*adaptive.report.stats.max_ms, *blocking.report.stats.max_ms / 2.0);
+  EXPECT_FALSE(blocking.report.stats.state_changes.has_value());  // fixed policy: no adaptive stats
+}
+
+// BR-07: without overload, adaptive never leaves NORMAL and never drops.
+TEST(OverloadTest, AdaptiveWithoutOverloadNeverDrops) {
+  const OverloadRun run = run_overloaded("adaptive", milliseconds(10));  // 0.5x
+  EXPECT_EQ(run.counts.dropped, 0u);
+  ASSERT_TRUE(run.report.stats.state_changes.has_value());
+  EXPECT_EQ(*run.report.stats.state_changes, 0u);
+  EXPECT_EQ(run.report.stats.shedding_pct, 0.0);
+}
 
 TEST(OverloadTest, BlockingLatencyGrowsLinearlyAtExtremeOverload) {
   const OverloadRun run = run_overloaded("blocking", milliseconds(200));  // EC-03

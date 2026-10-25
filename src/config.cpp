@@ -7,6 +7,7 @@
 #include <system_error>
 
 #include "frameflow/policy/policy_factory.hpp"
+#include "frameflow/processor/processor.hpp"
 
 namespace frameflow {
 
@@ -61,7 +62,7 @@ class Validator {
                                     const std::string& option,
                                     const std::vector<std::string_view>& allowed) {
     if (!text) return std::nullopt;
-    if (std::find(allowed.begin(), allowed.end(), *text) != allowed.end()) return *text;
+    if (std::find(allowed.begin(), allowed.end(), *text) != allowed.end()) return text;
     std::string list;
     for (std::string_view name : allowed) list += (list.empty() ? "" : ", ") + std::string(name);
     fail(option, *text, "must be one of: " + list, "try " + option + "=" + std::string(allowed[0]));
@@ -89,11 +90,11 @@ void validate_run_length(const RawConfig& raw, Validator& v, RunConfig& config) 
   }
   if (raw.frames) {
     if (const auto frames = v.integer(raw.frames, "--frames", 1, 1'000'000, "1800")) {
-      config.frames = *frames;
+      config.frames = frames;
       config.duration_s.reset();
     }
   } else if (const auto duration = v.number(raw.duration, "--duration", 1, 3600, "60")) {
-    config.duration_s = *duration;
+    config.duration_s = duration;
   }
 }
 
@@ -120,16 +121,104 @@ void validate_source(const RawConfig& raw, Validator& v, RunConfig& config) {
     if (!source) return;  // already reported; the --input rule only applies to a valid source
     config.source = *source;
   }
-  if (config.source != "file") return;
-  if (!config.input) {  // VR-15
+  // VR-15. The file itself (VR-14) is checked when it is opened: a bad file is exit 3, not 2.
+  if (config.source == "file" && !config.input) {
     v.fail("--source", config.source, "needs --input=<video file>",
            "add --input or use --source=synthetic");
-  } else {  // D20: the video source arrives in Phase 5
-    v.fail("--source", config.source, "is not available yet", "use --source=synthetic");
+  }
+  if (const auto loop = v.choice(raw.loop, "--loop", {"true", "false"})) {
+    config.loop = *loop == "true";
   }
 }
 
+// Seconds in (0, max] from a duration flag (D39).
+std::optional<double> spike_seconds(const std::optional<std::string>& text,
+                                    const std::string& option, Validator& v,
+                                    const std::string& fallback) {
+  if (!text) return std::nullopt;
+  const std::optional<double> seconds = parse_seconds(*text);
+  if (!seconds || *seconds <= 0 || *seconds > 3600) {
+    v.fail(option, *text, "must be a duration above 0 and at most 3600 s, like 1s or 500ms",
+           "try " + option + "=" + fallback);
+    return std::nullopt;
+  }
+  return seconds;
+}
+
+// VR-06: the three spike flags are required in bursty mode and only allowed there.
+void validate_bursty(const RawConfig& raw, Validator& v, RunConfig& config) {
+  const bool any = raw.spike_ms || raw.spike_len || raw.spike_every;
+  if (config.cost_mode != "bursty") {
+    if (any) {
+      v.fail("--spike-ms/--spike-len/--spike-every", "", "only apply with --cost-mode=bursty",
+             "add --cost-mode=bursty or remove them");
+    }
+    return;
+  }
+  if (!raw.spike_ms || !raw.spike_len || !raw.spike_every) {
+    v.fail("--cost-mode", "bursty", "needs --spike-ms, --spike-len and --spike-every",
+           "e.g. --spike-ms=80 --spike-len=1s --spike-every=5s");
+    return;
+  }
+  const auto spike_ms = v.number(raw.spike_ms, "--spike-ms", 0, 10'000, "80");
+  const auto len = spike_seconds(raw.spike_len, "--spike-len", v, "1s");
+  const auto every = spike_seconds(raw.spike_every, "--spike-every", v, "5s");
+  if (spike_ms && *spike_ms < config.cost_ms) {
+    v.fail("--spike-ms", *raw.spike_ms,
+           "must be at least --cost-ms (" + number_text(config.cost_ms) + ")",
+           "raise --spike-ms or lower --cost-ms");
+  }
+  if (len && every && *len >= *every) {
+    v.fail("--spike-len", *raw.spike_len,
+           "must be shorter than --spike-every (" + *raw.spike_every + ")",
+           "e.g. --spike-len=1s --spike-every=5s");
+  }
+  config.spike_ms = spike_ms;
+  config.spike_len_s = len;
+  config.spike_every_s = every;
+}
+
+// VR-08..VR-10: the three adaptive options, defaults 100 ms / 0.7 / 30, only with adaptive.
+void validate_adaptive(const RawConfig& raw, bool policy_ok, Validator& v, RunConfig& config) {
+  if (config.policy != "adaptive") {
+    if (policy_ok && (raw.target_ms || raw.exit_ratio || raw.window)) {
+      v.fail("--target-ms/--exit-ratio/--window", "", "only apply with --policy=adaptive",
+             "add --policy=adaptive or remove them");
+    }
+    return;
+  }
+  config.target_ms = 100.0;
+  config.exit_ratio = 0.7;
+  config.window = 30;
+  if (const auto target = v.number(raw.target_ms, "--target-ms", 1, 60'000, "100")) {
+    config.target_ms = target;
+  }
+  if (raw.exit_ratio) {
+    const std::optional<double> ratio = parse_number(*raw.exit_ratio);
+    if (!ratio || *ratio <= 0.0 || *ratio >= 1.0) {
+      v.fail("--exit-ratio", *raw.exit_ratio, "must be greater than 0 and less than 1",
+             "0.7 is a good start");
+    } else {
+      config.exit_ratio = ratio;
+    }
+  }
+  if (const auto window = v.integer(raw.window, "--window", 5, 1000, "30")) config.window = window;
+}
+
 }  // namespace
+
+std::optional<double> parse_seconds(std::string_view text) {
+  double scale = 1.0;
+  if (text.size() > 2 && text.substr(text.size() - 2) == "ms") {
+    text.remove_suffix(2);
+    scale = 0.001;
+  } else if (text.size() > 1 && text.back() == 's') {
+    text.remove_suffix(1);
+  }
+  const std::optional<double> value = parse_number(text);
+  if (!value) return std::nullopt;
+  return *value * scale;
+}
 
 std::optional<double> parse_number(std::string_view text) {
   double value = 0.0;
@@ -159,10 +248,25 @@ PipelineConfig RunConfig::to_pipeline_config() const {
   out.cost = std::chrono::duration_cast<Clock::duration>(duration<double, std::milli>(cost_ms));
   out.cost_wait = cost_wait;
   out.policy = policy;
+  out.processor = processor;
+  out.kernel = kernel;
+  if (target_ms && exit_ratio && window) {
+    out.adaptive = AdaptiveParams{
+        std::chrono::duration_cast<Clock::duration>(duration<double, std::milli>(*target_ms)),
+        *exit_ratio, static_cast<std::size_t>(*window)};
+  }
+  if (spike_ms && spike_len_s && spike_every_s) {
+    const auto to_clock = [](double seconds) {
+      return std::chrono::duration_cast<Clock::duration>(duration<double>(seconds));
+    };
+    out.burst = BurstConfig{to_clock(*spike_ms / 1000.0), to_clock(*spike_len_s),
+                            to_clock(*spike_every_s), seed};
+  }
   if (frames) {
-    out.frames = *frames;
+    out.frames = frames;
   } else {
-    out.duration = std::chrono::duration_cast<Clock::duration>(duration<double>(*duration_s));
+    out.duration =
+        std::chrono::duration_cast<Clock::duration>(duration<double>(duration_s.value_or(0.0)));
   }
   return out;
 }
@@ -181,14 +285,28 @@ ValidationResult validate(const RawConfig& raw) {
   if (const auto cost = v.number(raw.cost_ms, "--cost-ms", 0, 10'000, "0")) {  // VR-05
     config.cost_ms = *cost;
   }
-  if (const auto mode = v.choice(raw.cost_mode, "--cost-mode", {"fixed"})) config.cost_mode = *mode;
+  if (const auto mode = v.choice(raw.cost_mode, "--cost-mode", {"fixed", "bursty"})) {
+    config.cost_mode = *mode;
+  }
+  validate_bursty(raw, v, config);                                                         // VR-06
+  if (const auto processor = v.choice(raw.processor, "--processor", processor_names())) {  // VR-11
+    config.processor = *processor;
+  }
+  if (const auto kernel = v.integer(raw.kernel, "--kernel", 3, 99, "15")) {  // VR-12
+    if (*kernel % 2 == 0) {
+      v.fail("--kernel", raw.kernel.value_or(""), "must be odd",
+             "try --kernel=" + std::to_string(*kernel + 1));
+    } else {
+      config.kernel = static_cast<int>(*kernel);
+    }
+  }
   if (const auto wait = v.choice(raw.cost_wait, "--cost-wait", {"busy", "sleep"})) {
     config.cost_wait = *wait == "sleep" ? CostWait::Sleep : CostWait::Busy;
   }
-  if (const auto policy = v.choice(raw.policy, "--policy", policy_names())) {  // VR-07
-    config.policy = *policy;
-  }
-  if (raw.resolution) {  // VR-13
+  const auto policy = v.choice(raw.policy, "--policy", policy_names());  // VR-07
+  if (policy) config.policy = *policy;
+  validate_adaptive(raw, !raw.policy || policy, v, config);  // VR-08..VR-10
+  if (raw.resolution) {                                      // VR-13
     if (const std::optional<cv::Size> size = parse_resolution(*raw.resolution)) {
       config.resolution = *size;
     } else {
