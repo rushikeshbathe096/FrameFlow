@@ -6,8 +6,13 @@ on:
   pull_request:
 
 jobs:
+  # Unit and integration tests in each preset (SR-03 ASan/UBSan, SR-04 TSan, RR-11).
   build-and-test:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [debug, asan, tsan]
     steps:
       - uses: actions/checkout@v4
 
@@ -17,11 +22,41 @@ jobs:
           sudo apt-get install -y build-essential cmake git pkg-config \
             libopencv-dev libgtest-dev clang-format
 
-      - name: Configure (debug)
-        run: cmake --preset debug
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
 
-      - name: Build (debug)
-        run: cmake --build --preset debug --parallel
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
 
-      - name: Test (debug)
-        run: ctest --preset debug
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  # Long and stress tests (60 s gate run, 200 lifecycle cycles), kept out of the default
+  # presets (D10). The tsan preset runs tests under `setarch -R` (see docs/DESIGN.md).
+  long-and-stress:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - configure: debug
+            test: debug-long
+          - configure: tsan
+            test: tsan-long
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install apt dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git pkg-config \
+            libopencv-dev libgtest-dev
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.configure }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.configure }} --parallel
+
+      - name: Long and stress tests
+        run: ctest --preset ${{ matrix.test }}

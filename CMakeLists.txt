@@ -37,15 +37,31 @@ endif()
 
 find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 find_package(GTest REQUIRED)
+find_package(Threads REQUIRED)
 
 # Generated header lives in the build tree so the version has one source: project() above.
 configure_file(include/frameflow/version.hpp.in
                ${PROJECT_BINARY_DIR}/generated/frameflow/version.hpp @ONLY)
 
-add_library(frameflow_core STATIC src/version.cpp)
+add_library(frameflow_core STATIC
+  src/clock.cpp
+  src/config.cpp
+  src/pipeline.cpp
+  src/policy/policy_factory.cpp
+  src/metrics/csv_reporter.cpp
+  src/metrics/metrics_store.cpp
+  src/metrics/run_report.cpp
+  src/metrics/stats.cpp
+  src/processor/cost_model.cpp
+  src/source/source_runner.cpp
+  src/source/synthetic_source.cpp
+  src/version.cpp
+  src/worker.cpp)
 target_include_directories(frameflow_core
   PUBLIC ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/generated)
-target_link_libraries(frameflow_core PRIVATE frameflow_warnings)
+target_link_libraries(frameflow_core
+  PUBLIC Threads::Threads opencv_core
+  PRIVATE frameflow_warnings)
 
 add_executable(frameflow src/main.cpp)
 target_link_libraries(frameflow PRIVATE frameflow_core frameflow_warnings)
