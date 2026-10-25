@@ -100,6 +100,48 @@ TEST(SourceRunnerTest, LateReleaseKeepsScheduledCaptureTimeAndRecordsLateness) {
   }
 }
 
+// D38: the tracker splits lateness into backpressure and the source's own part.
+TEST(BackpressureTrackerTest, NoPushWaitMeansAllLatenessIsOwn) {
+  BackpressureTracker tracker;
+  EXPECT_EQ(tracker.on_release(milliseconds(30)), Clock::duration::zero());
+}
+
+TEST(BackpressureTrackerTest, LatenessFromBlockedPushIsBackpressure) {
+  BackpressureTracker tracker;
+  tracker.on_push_wait(milliseconds(100));  // blocked on a full queue for 100 ms
+  // The next frame was released 60 ms late, all of it because of the wait.
+  EXPECT_EQ(tracker.on_release(milliseconds(60)), milliseconds(60));
+}
+
+TEST(BackpressureTrackerTest, CaughtUpWaitIsForgotten) {
+  BackpressureTracker tracker;
+  tracker.on_push_wait(milliseconds(500));
+  EXPECT_EQ(tracker.on_release(milliseconds(500)), milliseconds(500));
+  EXPECT_EQ(tracker.on_release(milliseconds(0)), Clock::duration::zero());  // back on schedule
+  // A later slow phase of the source itself is not hidden by the old wait.
+  EXPECT_EQ(tracker.on_release(milliseconds(20)), Clock::duration::zero());
+}
+
+TEST(BackpressureTrackerTest, OwnSlownessOnTopOfWaitIsKept) {
+  BackpressureTracker tracker;
+  tracker.on_push_wait(milliseconds(50));
+  EXPECT_EQ(tracker.on_release(milliseconds(80)), milliseconds(50));  // 30 ms is the source's own
+}
+
+TEST(SourceRunnerTest, SlowSourceWithoutBlockingHasNoBackpressure) {
+  Fixture f;
+  HookSource source([&](std::uint64_t) {
+    f.clock.advance(milliseconds(50));  // slower than the 40 ms interval; the queue never fills
+    return true;
+  });
+  SourceRunner runner(source, f.clock, f.queue, f.metrics, 25.0, 3);
+  runner.run(kT0, f.stop);
+  for (const FramePtr& frame : drain(f.queue)) {
+    EXPECT_EQ(frame->meta.backpressure, Clock::duration::zero()) << frame->meta.id;
+    EXPECT_EQ(frame->meta.own_lateness(), frame->meta.source_lateness);
+  }
+}
+
 TEST(SourceRunnerTest, StopBeforeStartProducesNothing) {
   Fixture f;
   f.stop = true;

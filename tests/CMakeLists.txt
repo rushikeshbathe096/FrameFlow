@@ -5,6 +5,7 @@ add_executable(frameflow_tests
   integration/result_writing_test.cpp
   integration/run_command_test.cpp
   integration/signal_test.cpp
+  integration/source_lateness_test.cpp
   stress/lifecycle_test.cpp
   stress/policy_stress_test.cpp
   unit/blocking_policy_test.cpp

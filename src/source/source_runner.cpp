@@ -11,6 +11,12 @@ namespace {
 constexpr std::chrono::milliseconds kStopCheckInterval{50};
 }  // namespace
 
+Clock::duration BackpressureTracker::on_release(Clock::duration lateness) {
+  pending_ =
+      std::clamp(pending_, Clock::duration::zero(), std::max(lateness, Clock::duration::zero()));
+  return pending_;
+}
+
 SourceRunner::SourceRunner(ISource& source, Clock& clock, BoundedQueue<FramePtr>& queue,
                            MetricsStore& metrics, double fps, std::uint64_t max_frames)
     : source_(source),
@@ -37,6 +43,7 @@ void SourceRunner::wait_until(Clock::time_point t, const std::atomic<bool>& stop
 
 std::uint64_t SourceRunner::run(Clock::time_point t0, const std::atomic<bool>& stop) {
   produced_ = 0;
+  BackpressureTracker backpressure;
   for (std::uint64_t k = 0; k < max_frames_ && !stop; ++k) {
     FramePtr frame = source_.next(k);  // decode/generate before the release time
     if (!frame) break;                 // end of input
@@ -48,12 +55,15 @@ std::uint64_t SourceRunner::run(Clock::time_point t0, const std::atomic<bool>& s
     const Clock::time_point released = clock_.now();
     frame->meta.t_cap = scheduled;
     frame->meta.source_lateness = released - scheduled;
+    frame->meta.backpressure = backpressure.on_release(frame->meta.source_lateness);
     frame->meta.t_push = released;
     ++produced_;
 
     // Queued: the frame now belongs to the worker. Dropped: the queue's drop callback recorded
     // it. Only on Shutdown is the frame still ours.
-    if (queue_.push(std::move(frame)) == PushResult::Shutdown) {
+    const PushResult pushed = queue_.push(std::move(frame));
+    backpressure.on_push_wait(clock_.now() - released);  // long only while blocked on a full queue
+    if (pushed == PushResult::Shutdown) {
       // Shutdown while waiting for space: the frame is still owned here and is in-flight.
       // NOLINTNEXTLINE(bugprone-use-after-move): a failed push leaves `frame` untouched
       frame->meta.t_push.reset();

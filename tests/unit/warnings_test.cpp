@@ -54,6 +54,25 @@ TEST(WarningsTest, LateSourceAtExactlyOnePercentOrFiveMsDoesNotWarn) {
   EXPECT_FALSE(has(collect_warnings(sixty_seconds(), report), "source was late"));
 }
 
+// D38: lateness caused by waiting on a full queue (blocking backpressure) is not CPU overload.
+TEST(WarningsTest, LatenessFromBackpressureDoesNotWarn) {
+  RunReport report = long_run(100);
+  for (FrameMeta& meta : report.frames) {
+    meta.source_lateness = milliseconds(400);
+    meta.backpressure = milliseconds(398);  // own lateness 2 ms
+  }
+  EXPECT_FALSE(has(collect_warnings(sixty_seconds(), report), "source was late"));
+}
+
+TEST(WarningsTest, OwnLatenessOnTopOfBackpressureStillWarns) {
+  RunReport report = long_run(100);
+  for (FrameMeta& meta : report.frames) {
+    meta.source_lateness = milliseconds(400);
+    meta.backpressure = milliseconds(390);  // own lateness 10 ms
+  }
+  EXPECT_TRUE(has(collect_warnings(sixty_seconds(), report), "on 100.0% of frames"));
+}
+
 TEST(WarningsTest, StoppedDuringWarmupWarns) {
   RunReport report = long_run(10);
   report.ended_by = EndedBy::StopRequested;

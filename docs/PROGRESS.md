@@ -112,3 +112,15 @@ Deviations from the docs and why (all in DESIGN.md):
 - D36: `output_fps` from P2.4 was counting a capture cohort; fixed to a delivery rate.
 - `ended_by` uses `input_eof` (SRS EC-05) instead of the `input_end` first written in P2.6.
 - CI was not run (needs a push); the workflow YAML parses and the smoke commands were run locally.
+
+## Phase 2 fixes after review
+
+- Lateness warning fired on ~91% of frames for blocking at 1.5x (user's manual run): the lateness
+  came from backpressure (the source waiting in earlier pushes), not CPU. Added
+  `FrameMeta::backpressure` + `BackpressureTracker` in the source loop; the ER-07 warning now uses
+  `own_lateness()`; `frames.csv` unchanged (D38): `frame.hpp`, `source_runner.*`, `warnings.*`,
+  `source_runner_test.cpp`, `warnings_test.cpp`, `integration/source_lateness_test.cpp` | debug
+  266/266, tsan 266/266, asan 266/266; mutation check (`own_lateness()` returning the total) fails
+  BlockingBackpressureAtOnePointFiveXDoesNotWarn and LatenessFromBackpressureDoesNotWarn; re-run of
+  the reported case (12 s, blocking, 50 ms cost): no warning, while 89.2% of frames still have
+  `lateness_us` > 5 ms in frames.csv

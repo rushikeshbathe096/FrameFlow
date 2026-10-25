@@ -28,12 +28,14 @@ std::string number_text(double value) {
   return std::string(buffer, result.ptr);
 }
 
-// Over every produced frame (lateness is a property of the source, not of the window).
+// Over every produced frame (lateness is a property of the source, not of the window). Only the
+// source's own lateness counts: waiting on a full queue under blocking is backpressure, the
+// policy working as designed, not an overloaded system (D38).
 std::optional<std::string> late_source(const RunReport& report) {
   if (report.frames.empty()) return std::nullopt;
   std::size_t late = 0;
   for (const FrameMeta& meta : report.frames) {
-    if (meta.source_lateness > kLateThreshold) ++late;
+    if (meta.own_lateness() > kLateThreshold) ++late;
   }
   const double fraction = static_cast<double>(late) / static_cast<double>(report.frames.size());
   if (fraction <= kLateFractionLimit) return std::nullopt;

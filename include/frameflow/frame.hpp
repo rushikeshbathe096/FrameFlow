@@ -46,11 +46,16 @@ struct FrameMeta {
   std::optional<Clock::time_point> t_proc_end;
   std::optional<Clock::time_point> t_out;
   std::optional<Clock::time_point> t_drop;  // when a policy dropped it (FR-POL-10)
-  Clock::duration source_lateness{0};
+  Clock::duration source_lateness{0};       // actual release - scheduled release (FR-SRC-07)
+  // The part of source_lateness caused by the source waiting inside earlier push() calls
+  // (blocking backpressure), not by the source itself being slow (D38). Not in frames.csv.
+  Clock::duration backpressure{0};
   DropReason drop_reason = DropReason::None;  // single source of truth for "dropped"
   bool warmup = false;
 
   bool is_dropped() const { return drop_reason != DropReason::None; }
+  // Lateness the source caused itself (CPU, slow decode, oversleeping), used by ER-07.
+  Clock::duration own_lateness() const { return source_lateness - backpressure; }
 };
 
 class Frame {
