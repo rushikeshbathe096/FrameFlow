@@ -2,11 +2,12 @@
 
 #include <charconv>
 #include <chrono>
-#include <fstream>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+
+#include "frameflow/platform/output_dir.hpp"
 
 namespace frameflow {
 
@@ -48,15 +49,6 @@ void put_frame_row(std::ostream& out, const FrameMeta& meta, Clock::time_point t
       << (meta.warmup ? '1' : '0') << '\n';
 }
 
-template <typename WriteBody>
-void write_file(const std::filesystem::path& path, WriteBody write_body) {
-  std::ofstream out(path, std::ios::binary);  // binary: exactly "\n", no translation
-  if (!out) throw std::runtime_error("cannot open " + path.string() + " for writing");
-  write_body(out);
-  out.flush();
-  if (!out) throw std::runtime_error("cannot write " + path.string());
-}
-
 }  // namespace
 
 void write_frames_csv(std::ostream& out, const std::vector<FrameMeta>& frames,
@@ -88,12 +80,12 @@ void write_events_csv(std::ostream& out, const std::vector<Event>& events, Clock
 }
 
 void write_csv_files(const std::filesystem::path& dir, const RunReport& report) {
-  write_file(dir / "frames.csv",
-             [&](std::ostream& out) { write_frames_csv(out, report.frames, report.t0); });
-  write_file(dir / "depth.csv",
-             [&](std::ostream& out) { write_depth_csv(out, report.depth, report.t0); });
-  write_file(dir / "events.csv",
-             [&](std::ostream& out) { write_events_csv(out, report.events, report.t0); });
+  write_result_file(dir / "frames.csv",
+                    [&](std::ostream& out) { write_frames_csv(out, report.frames, report.t0); });
+  write_result_file(dir / "depth.csv",
+                    [&](std::ostream& out) { write_depth_csv(out, report.depth, report.t0); });
+  write_result_file(dir / "events.csv",
+                    [&](std::ostream& out) { write_events_csv(out, report.events, report.t0); });
 }
 
 }  // namespace frameflow

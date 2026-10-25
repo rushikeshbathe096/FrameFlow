@@ -31,12 +31,13 @@ struct RunStats {
   // Measurement window [t0 + warmup, t_end) only (BR-06).
   double window_s = 0.0;
   std::uint64_t window_produced = 0;
-  std::uint64_t window_delivered = 0;
+  std::uint64_t window_delivered = 0;  // captured in the window and delivered (latency set)
   std::uint64_t window_dropped_oldest = 0;
   std::uint64_t window_dropped_newest = 0;
   std::uint64_t window_dropped_stale = 0;
   std::optional<double> p50_ms, p95_ms, p99_ms, max_ms;
-  std::optional<double> input_fps, output_fps;
+  std::optional<double> input_fps;      // frames captured in the window / window_s
+  std::optional<double> output_fps;     // frames delivered (t_out) in the window / window_s (D36)
   std::optional<double> drop_rate_pct;  // all reasons
   std::optional<double> drop_oldest_pct, drop_newest_pct, drop_stale_pct;
   std::optional<double> depth_mean;

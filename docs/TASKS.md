@@ -115,7 +115,7 @@ capability changes). SR-02 (warning and hardening flags) was done in Phase 0.
   - Reqs: DR-03, BR-06, BR-09, EC-08 (validity part)
   - Verify: golden files; stop before warm-up end gives `valid=false`; debug+asan
   - Write it myself: no
-- [ ] **P2.6** `summary.json`: config, environment, metrics, valid, version, git commit, schema version; platform module
+- [x] **P2.6** `summary.json`: config, environment, metrics, valid, version, git commit, schema version; platform module
   - Files: `include/frameflow/metrics/json_reporter.hpp`, `src/metrics/json_reporter.cpp`, `include/frameflow/platform/environment.hpp`, `src/platform/environment.cpp`, `CMakeLists.txt` (git commit, nlohmann-json), `tests/unit/json_reporter_test.cpp`, `.github/workflows/ci.yml` (apt: `nlohmann-json3-dev`)
   - Reqs: DR-04, DR-08, BR-10, SR-08, RR-12, FR-CLI-04 (commit embedding), FR-MET-05 (all four files)
   - Verify: schema test (all keys present, `null` latency when nothing delivered); hostname hashed; debug+asan
@@ -125,32 +125,32 @@ capability changes). SR-02 (warning and hardening flags) was done in Phase 0.
   - Reqs: VR-01, VR-02, VR-03, VR-04, VR-05, VR-07, VR-13, VR-15 (synthetic only), VR-16, VR-20, VR-22, VR-23, ER-01
   - Verify: one pass + one fail test per rule; all errors in one message; debug
   - Write it myself: no
-- [ ] **P2.8** CLI11: `frameflow run`, `--help`, `--version`, effective-config block (S2)
+- [x] **P2.8** CLI11: `frameflow run`, `--help`, `--version`, effective-config block (S2)
   - Files: `src/main.cpp`, `include/frameflow/cli.hpp`, `src/cli.cpp`, `tests/unit/cli_test.cpp`, `.github/workflows/ci.yml` (apt: `libcli11-dev`)
   - Reqs: FR-CLI-01 (flags part), FR-CLI-03, FR-CLI-04, VR-21, VR-24, ER-02 (exit 2)
   - Verify: parse tests on argv arrays; unknown flag suggests closest; `--version` shows commit; debug
   - Write it myself: no
-- [ ] **P2.9a** Root refusal and permission errors *(placement)*
+- [x] **P2.9a** Root refusal and permission errors *(placement)*
   - Files: `include/frameflow/platform/privileges.hpp`, `src/platform/privileges.cpp`, `src/cli.cpp`, `tests/unit/privileges_test.cpp`
   - Reqs: FR-ROLE-02, FR-ROLE-04, SR-AUTH-05, ER-02 (exits 4 and 5)
   - Verify: effective-UID check injected so tests need no root; `--allow-root` bypasses with warning; unwritable `--out` parent names the path and exits 4; debug
   - Write it myself: no
-- [ ] **P2.9b** Output-directory safety and file write errors *(placement)*
+- [x] **P2.9b** Output-directory safety and file write errors *(placement)*
   - Files: `include/frameflow/platform/output_dir.hpp`, `src/platform/output_dir.cpp`, `src/cli.cpp`, `tests/unit/output_dir_test.cpp`
   - Reqs: BR-12, VR-17, SR-05, SR-06, SR-AUTH-04, FR-ROLE-03, DR-11, ER-05, EC-17
   - Verify: existing dir refused without `--overwrite`; symlink escape refused; `O_EXCL` never follows a symlink; 0644/0755; disk-full via `/dev/full` (D8); nothing written outside `--out`; debug+asan
   - Write it myself: no
-- [ ] **P2.10** Signals and exit codes: first SIGINT/SIGTERM graceful (0), second immediate (130)
+- [x] **P2.10** Signals and exit codes: first SIGINT/SIGTERM graceful (0), second immediate (130)
   - Files: `include/frameflow/platform/signals.hpp`, `src/platform/signals.cpp`, `src/main.cpp`, `tests/integration/signal_test.cpp`
   - Reqs: FR-CLI-06, EC-08, EC-09, EC-10, EC-11, ER-02, PR-06, RR-12
   - Verify: test spawns the `frameflow` binary and sends signals (no `system()`); exit codes; results written; debug+tsan
   - Write it myself: no
-- [ ] **P2.11** Console summary (S4) and warnings
+- [x] **P2.11** Console summary (S4) and warnings
   - Files: `include/frameflow/ui/console_reporter.hpp`, `src/ui/console_reporter.cpp`, `tests/unit/console_reporter_test.cpp`
   - Reqs: FR-MET-06, ER-07, ER-01 (format)
   - Verify: golden text output incl. empty state "no frames delivered"; warnings in stderr and `summary.json`; debug
   - Write it myself: no
-- [ ] **P2.12** Phase 2 integration: overload behaviour per policy, CI smoke runs, 60 s TSan stress
+- [x] **P2.12** Phase 2 integration: overload behaviour per policy, CI smoke runs, 60 s TSan stress
   - Files: `tests/integration/overload_test.cpp`, `tests/stress/policy_stress_test.cpp`, `.github/workflows/ci.yml`
   - Reqs: EC-03, BR-01..BR-04 (all policies), PR-10, SR-04 (stress part)
   - Verify: blocking latency grows vs dropping bounded (invariant checks, not exact numbers); 40-60% drops at 2.0x; debug+tsan+asan

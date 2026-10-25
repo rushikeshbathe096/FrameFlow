@@ -1,0 +1,49 @@
+// cli.hpp
+// Responsibility: the command line (UIUX 3, S1, S2). Parses argv with CLI11 into raw option
+// strings (validation is config.hpp's job, so every problem is reported at once), prints
+// `--help` and `--version`, rejects unknown flags with the closest valid one (VR-21), formats the
+// effective-configuration block printed at run start (VR-24), and maps outcomes to the exit codes
+// of SRS 9.1.
+// Thread-safety: pure functions writing only to the streams they are given; called on the main
+// thread before any pipeline thread starts.
+#pragma once
+
+#include <filesystem>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "frameflow/config.hpp"
+#include "frameflow/exit_codes.hpp"
+
+namespace frameflow {
+
+// Everything `frameflow run` was given, still unvalidated.
+struct RunArgs {
+  RawConfig raw;
+  std::optional<std::string> out;
+  bool overwrite = false;      // --overwrite: reuse an existing --out folder (D30)
+  bool allow_root = false;     // --allow-root (FR-ROLE-02)
+  bool allow_any_out = false;  // --allow-any-out (SR-05)
+};
+
+struct CliParse {
+  std::optional<RunArgs> run;  // set when `frameflow run` should execute
+  int exit_code = kExitOk;     // the process exit code when run is empty
+};
+
+// Help and version text go to out, errors to err.
+CliParse parse_cli(int argc, const char* const* argv, std::ostream& out, std::ostream& err);
+
+// The known flag with the smallest edit distance to unknown (e.g. "--polcy" -> "--policy").
+std::string closest_flag(std::string_view unknown, const std::vector<std::string>& known);
+
+// UIUX S2: the effective configuration after defaults (VR-24).
+std::string format_run_start(const RunConfig& config, const std::filesystem::path& out_dir);
+
+// Parses argv and, for `run`, executes the run. Returns the process exit code.
+int cli_main(int argc, const char* const* argv, std::ostream& out, std::ostream& err);
+
+}  // namespace frameflow

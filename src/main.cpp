@@ -1,8 +1,5 @@
 #include <iostream>
 
-#include "frameflow/version.hpp"
+#include "frameflow/cli.hpp"
 
-int main() {
-  std::cout << "frameflow " << frameflow::version() << '\n';
-  return 0;
-}
+int main(int argc, char** argv) { return frameflow::cli_main(argc, argv, std::cout, std::cerr); }

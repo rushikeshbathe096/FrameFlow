@@ -69,9 +69,11 @@ RunStats compute_run_stats(const std::vector<FrameMeta>& frames,
   stats.window_s = std::max(0.0, std::chrono::duration<double>(t_end - window_start).count());
 
   std::vector<double> latencies_ms;
+  std::uint64_t delivered_in_window = 0;  // by t_out: a delivery rate, not a capture cohort (D36)
   for (const FrameMeta& meta : frames) {
     count_whole_run(meta, stats);
     if (meta.t_cap && *meta.t_cap >= window_start) count_window(meta, stats, latencies_ms);
+    if (meta.t_out && *meta.t_out >= window_start && *meta.t_out < t_end) ++delivered_in_window;
   }
 
   stats.p50_ms = percentile(latencies_ms, 50);
@@ -80,7 +82,7 @@ RunStats compute_run_stats(const std::vector<FrameMeta>& frames,
   stats.max_ms = percentile(latencies_ms, 100);
 
   stats.input_fps = per_second(stats.window_produced, stats.window_s);
-  stats.output_fps = per_second(stats.window_delivered, stats.window_s);
+  stats.output_fps = per_second(delivered_in_window, stats.window_s);
   const std::uint64_t window_dropped =
       stats.window_dropped_oldest + stats.window_dropped_newest + stats.window_dropped_stale;
   stats.drop_rate_pct = rate_pct(window_dropped, stats.window_produced);

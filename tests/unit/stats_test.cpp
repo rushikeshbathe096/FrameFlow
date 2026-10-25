@@ -134,6 +134,20 @@ TEST(RunStatsTest, ThroughputAndDropRatesByReason) {
   EXPECT_DOUBLE_EQ(*stats.drop_stale_pct, 0.0);
 }
 
+// D36: output FPS is the delivery rate inside the window (by t_out), so frames still queued at
+// the end do not lower it and a warm-up frame delivered inside the window counts.
+TEST(RunStatsTest, OutputFpsCountsDeliveriesInsideWindow) {
+  const std::vector<FrameMeta> frames = {
+      delivered(0, milliseconds(900), milliseconds(300)),   // captured in warm-up, out at 1.2 s
+      delivered(1, milliseconds(1500), milliseconds(300)),  // out at 1.8 s
+      in_flight(2, milliseconds(2900)),                     // still queued at the end
+      delivered(3, milliseconds(500), milliseconds(100)),   // out at 0.6 s: before the window
+  };
+  const RunStats stats = compute_run_stats(frames, {}, kT0, kT0 + seconds(3), seconds(1));
+  EXPECT_DOUBLE_EQ(*stats.output_fps, 1.0);  // 2 deliveries in [1 s, 3 s)
+  EXPECT_EQ(stats.window_delivered, 1u);     // capture cohort: only frame 1
+}
+
 TEST(RunStatsTest, DepthMeanAndMaxAfterWarmup) {
   const std::vector<DepthSample> depth = {
       {kT0 + milliseconds(10), 8},  // warm-up, ignored

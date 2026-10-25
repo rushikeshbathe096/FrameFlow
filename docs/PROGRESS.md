@@ -79,4 +79,36 @@ Deviations from the docs and why:
 - P2.3 PolicyFactory (ordered one-line registry, case-sensitive, error lists valid names); Pipeline creates its policy from `PipelineConfig::policy`; pipeline runs under each fixed policy at 2x overload: `policy/policy_factory.hpp`, `policy/policy_factory.cpp`, `pipeline.*`, `policy_factory_test.cpp`, `pipeline_test.cpp` | debug 123/123, tsan 123/123, asan 123/123
 - P2.4 Stats: nearest-rank `percentile`, `compute_run_stats` (whole-run counts; window rates, percentiles, depth after warm-up, D19), `RunResult::t_end`: `metrics/stats.hpp`, `metrics/stats.cpp`, `stats_test.cpp`, `pipeline.*` | debug 135/135, tsan 135/135, asan 135/135
 - P2.5 RunReport (warm-up flags, drop events from `t_drop`, validity BR-09: invalid if stopped in warm-up or ended by error) + `events.csv`; `write_csv_files` now takes the report and writes all three CSVs: `metrics/run_report.hpp`, `metrics/run_report.cpp`, `metrics/csv_reporter.*`, `run_report_test.cpp`, `csv_reporter_test.cpp` | debug 142/142, tsan 142/142, asan 142/142
+- P2.6 `summary.json` (DR-04 keys + `warnings`, `ended_by`, `error`; `null` for missing metrics; D22-D25) + platform `Environment` (CPU model, cores, RAM, kernel, compiler, OpenCV, FNV-1a hostname hash) + git commit embedded at configure time; nlohmann-json added to CMake and CI: `metrics/json_reporter.*`, `platform/environment.*`, `version.hpp.in`, `version.cpp`, `CMakeLists.txt`, `ci.yml`, `json_reporter_test.cpp`, `environment_test.cpp`, `version_test.cpp` | debug 178/178, tsan 178/178, asan 178/178
 - P2.7 RawConfig -> RunConfig validation (VR-01..05, 07, 13, 15, 16, 20; one pass + one fail test per rule, all errors at once, UIUX 8.2 message format) with strict `parse_number`/`parse_unsigned` (`std::from_chars`): `config.hpp`, `config.cpp`, `config_test.cpp` | debug 160/160, tsan 160/160, asan 160/160; fixed a real bug found by the test (an invalid `--source` also produced a spurious "needs --input" error)
+- P2.8 CLI11 `frameflow run`/`--help`/`--version` (table-driven flags in UIUX groups with defaults, unknown flag -> closest by edit distance, exit codes enum), S2 effective-config block, `run_command` (validate -> S2 -> create `--out` -> run -> four result files; exit 1/2/4), default `results/run_NNN` (D26-D28); `ended_by` uses SRS name `input_eof`: `cli.*`, `run_command.*`, `main.cpp`, `CMakeLists.txt`, `ci.yml`, `cli_test.cpp`, `run_command_test.cpp` | debug 197/197, tsan 197/197, asan 197/197; real 2 s run at 1.5x drop-oldest: produced 61 = delivered 40 + dropped 13 + in-flight 8
+- P2.9a Root refusal (exit 5, reason printed; `--allow-root` warns), checked before anything else; unwritable `--out` parent names the path, exit 4: `platform/privileges.*`, `exit_codes.hpp`, `cli.*`, `run_command.*`, `privileges_test.cpp`, `run_command_test.cpp` | debug 225/225, tsan 225/225, asan 225/225
+- P2.9b Output-folder safety (absolute path, existing refused without `--overwrite`, `--overwrite` removes only our 4 files, symlink anywhere in `--out` must resolve inside `$HOME`/cwd unless `--allow-any-out`, dirs 0755, files `O_EXCL|O_NOFOLLOW` 0644 written through the fd, disk full via `/dev/full` names file + reason) (D29-D32); CSV/JSON reporters now use `write_result_file`: `platform/output_dir.*`, `csv_reporter.*`, `json_reporter.*`, `run_command.cpp`, `output_dir_test.cpp`, `run_command_test.cpp` | debug 225/225, tsan 225/225, asan 225/225; mutation check: `O_TRUNC` instead of `O_EXCL|O_NOFOLLOW` fails ExistingResultFileIsNeverOverwritten and SymlinkResultFileIsNeverFollowed
+- P2.10 Signals: `SignalWatcher` (signals blocked before any thread, `sigtimedwait` watcher thread; first SIGINT/SIGTERM -> `request_stop`, second -> `_exit(130)`), created first in `run_command` and kept alive through file writes (D33, D34): `platform/signals.*`, `run_command.cpp`, `tests/CMakeLists.txt` (binary path), `signal_watcher_test.cpp`, `integration/signal_test.cpp` (spawns `frameflow` via posix_spawn) | debug 236/236, tsan 236/236, asan 236/236; signal tests repeated 20x debug, 10x TSan: all pass; first TSan run failed the 1 s check for the forced exit (1006 ms, TSan's exit pause), fixed for the child only (D34)
+- P2.11 Console summary S4 (whole-run counts + reason breakdown, after-warm-up latency/FPS/drop %/depth with a note, `—` empty states) and ER-07 warnings (late source, stopped in warm-up, warm-up > half, run < 10 s) on stderr and in `summary.json` (D35); fixed P2.4 `output_fps` to count deliveries by `t_out` in the window (D36; a real 4 s run at a 50 ms cost now shows out 20.0 fps instead of 18.3): `ui/console_reporter.*`, `metrics/warnings.*`, `metrics/stats.*`, `run_command.cpp`, `console_reporter_test.cpp`, `warnings_test.cpp`, `stats_test.cpp`, `run_command_test.cpp` | debug 249/249, tsan 249/249, asan 249/249
+- P2.12 Phase 2 integration (D37): per-policy overload tests (2.0x: 40-60% drops; EC-03 10x: 80-97% drops; blocking latency >= (k+1) x cost - k x interval for every frame; dropping max latency < half of blocking's and not growing), SR-04 stress 3 x 20 s at 2.0x with queue 1, PR-10 timing test, CI smoke run per policy in each preset: `tests/integration/overload_test.cpp`, `tests/integration/result_writing_test.cpp`, `tests/stress/policy_stress_test.cpp`, `ci.yml` | debug 256/256, asan 256/256, tsan 256/256, release 259/259 (incl. 3 `timing`: PR-10 write of 1800 frames passed), debug-long 7/7, tsan-long 7/7 (60 s gate + 60 s policy stress, TSan clean); smoke commands run locally against debug/asan/tsan binaries: 9/9 exit 0 with valid summary.json, no sanitizer output
+
+### Phase 2 summary
+
+Built: OverloadPolicy + blocking/drop-oldest/drop-newest + factory; Stats (nearest-rank, warm-up
+window); RunReport with validity and events.csv; summary.json (schema 1, environment with hashed
+hostname, git commit); RunConfig validation; CLI11 `frameflow run`/`--help`/`--version` with S2
+block; root refusal; output-folder safety (O_EXCL/O_NOFOLLOW, symlink rule, `--overwrite`);
+SIGINT/SIGTERM handling (graceful, then exit 130); S4 console summary and ER-07 warnings.
+
+Clean build, all presets: debug 256/256, asan 256/256, tsan 256/256, release 259/259 (incl. 3
+`timing`); debug-long 7/7, tsan-long 7/7.
+
+SPEC 16 Phase 2 gate: three fixed policies selectable from the CLI (`--policy`, smoke-run per
+policy); unit tests for each policy and Stats; sustained overload shows growing latency for
+blocking (hard per-frame lower bound) vs bounded latency for dropping (overload_test).
+Static checks: no raw new/delete in product code; every condition-variable wait has a predicate;
+no I/O on source/worker threads; steady_clock only inside `clock.*`; no system()/popen(); every
+header has responsibility and thread-safety comments.
+
+Deviations from the docs and why (all in DESIGN.md):
+- D26/D27: default `--out` is `results/run_NNN` and S2 has no wall-clock time (no system_clock).
+- D35: warnings go to stderr (ER-07) rather than inside the S4 block on stdout.
+- D36: `output_fps` from P2.4 was counting a capture cohort; fixed to a delivery rate.
+- `ended_by` uses `input_eof` (SRS EC-05) instead of the `input_end` first written in P2.6.
+- CI was not run (needs a push); the workflow YAML parses and the smoke commands were run locally.

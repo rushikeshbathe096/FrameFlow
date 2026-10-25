@@ -25,8 +25,9 @@ void write_depth_csv(std::ostream& out, const std::vector<DepthSample>& samples,
                      Clock::time_point t0);
 void write_events_csv(std::ostream& out, const std::vector<Event>& events, Clock::time_point t0);
 
-// Writes `frames.csv`, `depth.csv` and `events.csv` into dir (which must exist). Throws
-// std::runtime_error naming the file if it cannot be opened or written.
+// Writes `frames.csv`, `depth.csv` and `events.csv` into dir (which must exist) with
+// write_result_file (O_EXCL, never follows a symlink). Throws std::runtime_error naming the file
+// if it cannot be created or written; files written before the failure are kept (ER-05).
 void write_csv_files(const std::filesystem::path& dir, const RunReport& report);
 
 }  // namespace frameflow

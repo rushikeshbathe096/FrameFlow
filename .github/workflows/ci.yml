@@ -20,7 +20,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake git pkg-config \
-            libopencv-dev libgtest-dev clang-format
+            libopencv-dev libgtest-dev nlohmann-json3-dev libcli11-dev clang-format
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -31,7 +31,21 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
-  # Long and stress tests (60 s gate run, 200 lifecycle cycles), kept out of the default
+      # One short real run per policy through the CLI; each must exit 0 and write a valid
+      # summary.json. `setarch -R` is needed by the tsan binary and harmless for the others.
+      - name: Smoke runs
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          TSAN_OPTIONS: halt_on_error=1:suppressions=${{ github.workspace }}/tsan.supp
+        run: |
+          mkdir -p smoke  # --out's parent must exist (VR-17)
+          for policy in blocking drop-oldest drop-newest; do
+            setarch -R ./build/${{ matrix.preset }}/frameflow run --source=synthetic \
+              --duration=3 --warmup=1 --cost-ms=50 --policy=$policy --out=smoke/$policy
+            python3 -c "import json,sys; s=json.load(open('smoke/$policy/summary.json')); sys.exit(0 if s['valid'] and s['metrics']['produced'] > 0 else 1)"
+          done
+
+  # Long and stress tests (60 s gate run, 200 lifecycle cycles, 60 s policy stress), kept out of the default
   # presets (D10). The tsan preset runs tests under `setarch -R` (see docs/DESIGN.md).
   long-and-stress:
     runs-on: ubuntu-24.04
@@ -50,7 +64,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake git pkg-config \
-            libopencv-dev libgtest-dev
+            libopencv-dev libgtest-dev nlohmann-json3-dev libcli11-dev
 
       - name: Configure
         run: cmake --preset ${{ matrix.configure }}

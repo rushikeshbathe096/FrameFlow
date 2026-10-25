@@ -1,23 +1,36 @@
 add_executable(frameflow_tests
   integration/invariants_test.cpp
+  integration/overload_test.cpp
   integration/pipeline_test.cpp
+  integration/result_writing_test.cpp
+  integration/run_command_test.cpp
+  integration/signal_test.cpp
   stress/lifecycle_test.cpp
+  stress/policy_stress_test.cpp
   unit/blocking_policy_test.cpp
   unit/bounded_queue_test.cpp
+  unit/cli_test.cpp
   unit/clock_test.cpp
   unit/config_test.cpp
+  unit/console_reporter_test.cpp
   unit/cost_model_test.cpp
   unit/csv_reporter_test.cpp
   unit/drop_policies_test.cpp
+  unit/environment_test.cpp
   unit/frame_test.cpp
+  unit/json_reporter_test.cpp
   unit/metrics_store_test.cpp
   unit/opencv_smoke_test.cpp
+  unit/output_dir_test.cpp
   unit/policy_factory_test.cpp
+  unit/privileges_test.cpp
   unit/run_report_test.cpp
+  unit/signal_watcher_test.cpp
   unit/source_runner_test.cpp
   unit/stats_test.cpp
   unit/synthetic_source_test.cpp
   unit/version_test.cpp
+  unit/warnings_test.cpp
   unit/worker_test.cpp)
 
 target_link_libraries(frameflow_tests PRIVATE
@@ -28,7 +41,9 @@ target_link_libraries(frameflow_tests PRIVATE
   GTest::gtest_main)
 
 target_compile_definitions(frameflow_tests PRIVATE
-  FRAMEFLOW_EXPECTED_VERSION="${PROJECT_VERSION}")
+  FRAMEFLOW_EXPECTED_VERSION="${PROJECT_VERSION}"
+  FRAMEFLOW_BINARY="$<TARGET_FILE:frameflow>")
+add_dependencies(frameflow_tests frameflow)  # signal tests spawn the real binary
 
 # Test suites are labelled by name prefix (D9, D10): Timing* -> `timing` (release preset only),
 # Long* -> `long`, Stress* -> `stress` (both only in the *-long presets). Everything else is
